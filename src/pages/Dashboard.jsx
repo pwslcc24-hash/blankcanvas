@@ -120,9 +120,24 @@ export default function Dashboard() {
   const syncAll = useCallback(async () => {
     setSyncingAll(true);
     try {
-      const res = await base44.functions.invoke("sync-all-wallets", {});
-      const { synced, failed } = res.data || {};
-      toast({ title: `Synced ${synced || 0} wallet(s)`, description: failed ? `${failed} failed` : undefined });
+      const runStartedAt = new Date().toISOString();
+      let totalSynced = 0;
+      let totalFailed = 0;
+      let remaining = 1;
+      let iterations = 0;
+      while (remaining > 0 && iterations < 40) {
+        iterations += 1;
+        const res = await base44.functions.invoke("sync-batch", { runStartedAt });
+        const { synced, failed, remaining: rem } = res.data || {};
+        totalSynced += synced || 0;
+        totalFailed += failed || 0;
+        remaining = rem || 0;
+        if (remaining > 0) await new Promise((r) => setTimeout(r, 3000));
+      }
+      toast({
+        title: `Synced ${totalSynced} wallet(s)`,
+        description: totalFailed ? `${totalFailed} failed` : undefined,
+      });
       await loadWallets();
     } catch (err) {
       toast({
@@ -138,9 +153,23 @@ export default function Dashboard() {
   const recomputeScores = useCallback(async () => {
     setScoring(true);
     try {
-      const res = await base44.functions.invoke("score-wallets", {});
-      const { scored, failed } = res.data || {};
-      toast({ title: `Scored ${scored || 0} wallet(s)`, description: failed ? `${failed} failed` : undefined });
+      const runStartedAt = new Date().toISOString();
+      let totalScored = 0;
+      let totalFailed = 0;
+      let remaining = 1;
+      let iterations = 0;
+      while (remaining > 0 && iterations < 40) {
+        iterations += 1;
+        const res = await base44.functions.invoke("score-batch", { runStartedAt });
+        const { scored, failed, remaining: rem } = res.data || {};
+        totalScored += scored || 0;
+        totalFailed += failed || 0;
+        remaining = rem || 0;
+      }
+      toast({
+        title: `Scored ${totalScored} wallet(s)`,
+        description: totalFailed ? `${totalFailed} failed` : undefined,
+      });
       await loadWallets();
     } catch (err) {
       toast({

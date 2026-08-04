@@ -64,23 +64,8 @@
   "required": ["wallet_address", "condition_id"],
   "rls": {
     "create": true,
-    "read": {
-      "$or": [
-        { "user_condition": { "id": "{{user.id}}" } },
-        { "user_condition": { "role": "admin" } }
-      ]
-    },
-    "update": {
-      "$or": [
-        { "user_condition": { "id": "{{user.id}}" } },
-        { "user_condition": { "role": "admin" } }
-      ]
-    },
-    "delete": {
-      "$or": [
-        { "user_condition": { "id": "{{user.id}}" } },
-        { "user_condition": { "role": "admin" } }
-      ]
-    }
+    "read": true,
+    "update": true,
+    "delete": true
   }
 }

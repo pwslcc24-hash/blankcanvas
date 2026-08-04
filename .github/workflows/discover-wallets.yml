@@ -1,0 +1,28 @@
+name: Auto-track leaderboard wallets
+
+# Casts a wide net daily: logs in as the bot account and pulls Polymarket's
+# leaderboard (top ~100 by all-time PnL, all-time volume, month PnL, month
+# volume), tracking any wallet not already tracked. No manual "Track" clicks
+# required. The scoring engine (run every 30 min by sync-wallets.yml) is what
+# actually decides who's good — this workflow only casts the net.
+on:
+  schedule:
+    - cron: "0 13 * * *" # once a day, 13:00 UTC
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    env:
+      BASE44_APP_ID: "6a71456255306fb44df3f700"
+      BASE44_BOT_EMAIL: ${{ secrets.BASE44_BOT_EMAIL }}
+      BASE44_BOT_PASSWORD: ${{ secrets.BASE44_BOT_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install "@base44/sdk@^0.8.0"
+        working-directory: .github/scripts
+      - run: node run-scheduled-task.mjs auto-track-leaderboard
+        working-directory: .github/scripts

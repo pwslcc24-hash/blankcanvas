@@ -1,9 +1,10 @@
 name: Sync tracked wallets
 
-# Base44 has no built-in cron, so this workflow is the scheduler:
-# every 30 minutes it tells the app to pull fresh activity/positions for all
-# tracked wallets, then recompute skill scores. Auth uses a shared secret
-# (BASE44_SYNC_SECRET repo secret == SYNC_SECRET Base44 secret).
+# Base44 has no built-in cron, so this workflow is the scheduler: every 30
+# minutes it logs into the app as a dedicated bot account (Base44 apps set to
+# "private" require a real session for every request, including function
+# calls) and asks it to pull fresh activity/positions for all tracked wallets,
+# then recompute skill scores.
 on:
   schedule:
     - cron: "*/30 * * * *"
@@ -12,19 +13,16 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      BASE44_APP_ID: "6a71456255306fb44df3f700"
+      BASE44_BOT_EMAIL: ${{ secrets.BASE44_BOT_EMAIL }}
+      BASE44_BOT_PASSWORD: ${{ secrets.BASE44_BOT_PASSWORD }}
     steps:
-      - name: Sync all tracked wallets
-        run: |
-          curl -sS --fail-with-body -X POST \
-            "https://fanatic-pure-canvas-space.base44.app/functions/sync-all-wallets" \
-            -H "X-Sync-Secret: ${{ secrets.BASE44_SYNC_SECRET }}" \
-            -H "Content-Type: application/json" \
-            -d '{}'
-
-      - name: Recompute skill scores
-        run: |
-          curl -sS --fail-with-body -X POST \
-            "https://fanatic-pure-canvas-space.base44.app/functions/score-wallets" \
-            -H "X-Sync-Secret: ${{ secrets.BASE44_SYNC_SECRET }}" \
-            -H "Content-Type: application/json" \
-            -d '{}'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install "@base44/sdk@^0.8.0"
+        working-directory: .github/scripts
+      - run: node run-scheduled-task.mjs sync-batch score-batch
+        working-directory: .github/scripts

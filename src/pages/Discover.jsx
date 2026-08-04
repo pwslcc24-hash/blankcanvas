@@ -19,7 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/use-toast";
-import { AlertTriangle, ExternalLink, Loader2, Plus } from "lucide-react";
+import { AlertTriangle, ExternalLink, Loader2, Plus, Sparkles } from "lucide-react";
 
 const CATEGORIES = ["OVERALL", "POLITICS", "SPORTS", "ESPORTS", "CRYPTO", "CULTURE", "ECONOMICS", "TECH", "FINANCE"];
 const TIME_PERIODS = ["DAY", "WEEK", "MONTH", "ALL"];
@@ -43,6 +43,7 @@ export default function Discover() {
   const [loading, setLoading] = useState(false);
   const [trackedAddresses, setTrackedAddresses] = useState(new Set());
   const [addingAddress, setAddingAddress] = useState(null);
+  const [autoTracking, setAutoTracking] = useState(false);
 
   const loadTracked = useCallback(async () => {
     const wallets = await base44.entities.TrackedWallet.list(null, 5000, 0, ["address"]);
@@ -101,6 +102,27 @@ export default function Discover() {
     [orderBy]
   );
 
+  const autoTrackTop = useCallback(async () => {
+    setAutoTracking(true);
+    try {
+      const res = await base44.functions.invoke("auto-track-leaderboard", { limitPerSlice: 100 });
+      const { newly_tracked, already_tracked } = res.data || {};
+      toast({
+        title: `Started tracking ${newly_tracked || 0} new wallet(s)`,
+        description: `${already_tracked || 0} were already tracked. They'll gain data on the next sync.`,
+      });
+      await loadTracked();
+    } catch (err) {
+      toast({
+        title: "Auto-track failed",
+        description: err?.response?.data?.error || err?.message || String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setAutoTracking(false);
+    }
+  }, [loadTracked]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -119,6 +141,27 @@ export default function Discover() {
             Tracking a wallet here only starts syncing its activity for your own review — it never places trades or
             copies anything automatically.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/30 bg-primary/5">
+        <CardContent className="py-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="text-sm">
+            <p className="font-medium">Cast a wide net automatically</p>
+            <p className="text-muted-foreground">
+              Tracks the top ~100 wallets by all-time PnL, all-time volume, this month's PnL, and this month's volume
+              in one click. Skips anyone already tracked. A daily automation does this for you too — this button is
+              just for running it on demand.
+            </p>
+          </div>
+          <Button onClick={autoTrackTop} disabled={autoTracking}>
+            {autoTracking ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Sparkles className="w-4 h-4 mr-2" />
+            )}
+            Track top wallets now
+          </Button>
         </CardContent>
       </Card>
 

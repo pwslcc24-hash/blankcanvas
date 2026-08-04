@@ -13,8 +13,21 @@ export function toIso(unixSeconds: number): string | undefined {
   return new Date(unixSeconds * 1000).toISOString();
 }
 
-async function getJson(url: string): Promise<any> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Polymarket's Data API rate-limits aggressively under bursty load (we've
+ * seen 429s after ~10 back-to-back batches). Retry with backoff instead of
+ * failing the whole wallet immediately.
+ */
+async function getJson(url: string, attempt = 1): Promise<any> {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (res.status === 429 && attempt <= 3) {
+    await sleep(500 * 2 ** attempt);
+    return getJson(url, attempt + 1);
+  }
   if (!res.ok) {
     throw new Error(`Polymarket API request failed (${res.status}): ${url}`);
   }

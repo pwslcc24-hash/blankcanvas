@@ -217,6 +217,8 @@ declare module '@base44/sdk' {
   interface FunctionNameRegistry {
     "polymarket-leaderboard": true;
     "sync-wallet": true;
-    "sync-all-wallets": true;
+    "sync-batch": true;
+    "score-batch": true;
+    "auto-track-leaderboard": true;
   }
 }
