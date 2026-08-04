@@ -1,0 +1,86 @@
+{
+  "name": "WalletPosition",
+  "type": "object",
+  "description": "A snapshot of a currently open position for a tracked wallet. Replaced in full on every sync, so it always reflects the latest known state rather than history.",
+  "properties": {
+    "wallet_address": {
+      "type": "string",
+      "description": "Lowercased wallet address this position belongs to"
+    },
+    "condition_id": {
+      "type": "string",
+      "description": "Polymarket condition ID for the market"
+    },
+    "market_title": {
+      "type": "string",
+      "description": "Market question/title"
+    },
+    "market_slug": {
+      "type": "string",
+      "description": "Market slug on polymarket.com"
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Outcome label, e.g. Yes/No"
+    },
+    "outcome_index": {
+      "type": "integer",
+      "description": "Index of the outcome held"
+    },
+    "size": {
+      "type": "number",
+      "description": "Shares/tokens held"
+    },
+    "avg_price": {
+      "type": "number",
+      "description": "Volume-weighted average entry price (0-1)"
+    },
+    "current_price": {
+      "type": "number",
+      "description": "Current market price (0-1)"
+    },
+    "initial_value_usd": {
+      "type": "number",
+      "description": "USD cost basis of the position"
+    },
+    "current_value_usd": {
+      "type": "number",
+      "description": "Current USD value of the position"
+    },
+    "cash_pnl_usd": {
+      "type": "number",
+      "description": "Unrealized + realized cash PnL in USD"
+    },
+    "percent_pnl": {
+      "type": "number",
+      "description": "PnL as a percentage of cost basis"
+    },
+    "redeemable": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the position's market has resolved and can be redeemed"
+    }
+  },
+  "required": ["wallet_address", "condition_id"],
+  "rls": {
+    "create": true,
+    "read": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "delete": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    }
+  }
+}

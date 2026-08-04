@@ -1,0 +1,130 @@
+{
+  "name": "TrackedWallet",
+  "type": "object",
+  "description": "A Polymarket wallet address being watched for the smart-wallet consensus system. Stores cached, synced stats — not the raw activity itself.",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Polymarket/Polygon wallet address (lowercased), e.g. 0xabc..."
+    },
+    "label": {
+      "type": "string",
+      "description": "Human-friendly nickname, defaults to the Polymarket username if known"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free-form research notes about why this wallet is being watched"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["manual", "leaderboard_pnl", "leaderboard_vol"],
+      "default": "manual",
+      "description": "How this wallet was discovered"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether this wallet should be included in bulk syncs"
+    },
+    "last_synced_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last time activity/positions were synced from Polymarket"
+    },
+    "last_sync_status": {
+      "type": "string",
+      "enum": ["pending", "success", "error"],
+      "default": "pending",
+      "description": "Outcome of the most recent sync attempt"
+    },
+    "last_sync_error": {
+      "type": "string",
+      "description": "Error message from the most recent failed sync, if any"
+    },
+    "all_time_pnl_usd": {
+      "type": "number",
+      "default": 0,
+      "description": "Polymarket's own all-time realized+unrealized PnL for this wallet, from the leaderboard endpoint (0 if the wallet is unranked)"
+    },
+    "all_time_volume_usd": {
+      "type": "number",
+      "default": 0,
+      "description": "Polymarket's own all-time trading volume for this wallet, from the leaderboard endpoint"
+    },
+    "activity_count_synced": {
+      "type": "integer",
+      "default": 0,
+      "description": "Total distinct activity rows stored for this wallet"
+    },
+    "distinct_markets_synced": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of distinct markets (condition IDs) seen in the synced activity"
+    },
+    "open_positions_count": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of currently open positions"
+    },
+    "open_positions_value_usd": {
+      "type": "number",
+      "default": 0,
+      "description": "Current USD value of all open positions"
+    },
+    "open_positions_unrealized_pnl_usd": {
+      "type": "number",
+      "default": 0,
+      "description": "Sum of cash PnL across all open positions"
+    },
+    "first_synced_activity_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of the earliest activity row currently synced (bounded by API history depth)"
+    },
+    "last_synced_activity_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of the most recent activity row synced"
+    },
+    "skill_score": {
+      "type": "number",
+      "description": "Latest composite skill score (0-100) from the scoring engine"
+    },
+    "skill_grade": {
+      "type": "string",
+      "description": "Letter grade (A-F) derived from the latest skill score"
+    },
+    "score_confidence": {
+      "type": "string",
+      "enum": ["insufficient", "low", "medium", "high"],
+      "description": "How much resolved-trade data backs the latest score"
+    },
+    "last_scored_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the scoring engine last ran for this wallet"
+    }
+  },
+  "required": ["address"],
+  "rls": {
+    "create": true,
+    "read": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "delete": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    }
+  }
+}

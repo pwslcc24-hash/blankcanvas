@@ -1,0 +1,95 @@
+{
+  "name": "WalletScore",
+  "type": "object",
+  "description": "Latest skill-score snapshot for a tracked wallet, computed from its synced activity. One row per wallet, replaced on each scoring run. Out-of-sample (OOS) metrics only count activity after the wallet was first tracked, which is the honest forward-test measure.",
+  "properties": {
+    "wallet_address": {
+      "type": "string",
+      "description": "Lowercased wallet address this score belongs to"
+    },
+    "computed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this score was computed"
+    },
+    "score": {
+      "type": "number",
+      "description": "Composite skill score, 0-100"
+    },
+    "grade": {
+      "type": "string",
+      "description": "Letter grade A-F derived from the score"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["insufficient", "low", "medium", "high"],
+      "description": "Data confidence based on the number of closed markets observed"
+    },
+    "closed_market_count": {
+      "type": "integer",
+      "description": "Markets where the wallet has fully exited (no open position) in synced history"
+    },
+    "win_rate": {
+      "type": "number",
+      "description": "Share of closed markets with positive realized profit (0-1)"
+    },
+    "realized_profit_usd": {
+      "type": "number",
+      "description": "Total realized profit across closed markets in synced history"
+    },
+    "buy_volume_usd": {
+      "type": "number",
+      "description": "Total USDC deployed into closed markets (cost basis for return on capital)"
+    },
+    "return_on_capital": {
+      "type": "number",
+      "description": "Realized profit divided by buy volume across closed markets"
+    },
+    "profit_concentration": {
+      "type": "number",
+      "description": "Largest single-market profit as a share of total profit (0-1). High values mean one lucky win dominates."
+    },
+    "distinct_markets": {
+      "type": "integer",
+      "description": "Distinct markets in synced activity"
+    },
+    "activity_span_days": {
+      "type": "number",
+      "description": "Days between the earliest and latest synced activity"
+    },
+    "oos_closed_market_count": {
+      "type": "integer",
+      "description": "Closed markets whose trades happened after tracking began (out-of-sample)"
+    },
+    "oos_realized_profit_usd": {
+      "type": "number",
+      "description": "Realized profit on out-of-sample closed markets"
+    },
+    "oos_win_rate": {
+      "type": "number",
+      "description": "Win rate on out-of-sample closed markets (0-1)"
+    }
+  },
+  "required": ["wallet_address", "computed_at", "score"],
+  "rls": {
+    "create": true,
+    "read": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "delete": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    }
+  }
+}

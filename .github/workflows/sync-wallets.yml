@@ -1,0 +1,30 @@
+name: Sync tracked wallets
+
+# Base44 has no built-in cron, so this workflow is the scheduler:
+# every 30 minutes it tells the app to pull fresh activity/positions for all
+# tracked wallets, then recompute skill scores. Auth uses a shared secret
+# (BASE44_SYNC_SECRET repo secret == SYNC_SECRET Base44 secret).
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync all tracked wallets
+        run: |
+          curl -sS --fail-with-body -X POST \
+            "https://fanatic-pure-canvas-space.base44.app/functions/sync-all-wallets" \
+            -H "X-Sync-Secret: ${{ secrets.BASE44_SYNC_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+
+      - name: Recompute skill scores
+        run: |
+          curl -sS --fail-with-body -X POST \
+            "https://fanatic-pure-canvas-space.base44.app/functions/score-wallets" \
+            -H "X-Sync-Secret: ${{ secrets.BASE44_SYNC_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{}'

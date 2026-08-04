@@ -1,0 +1,88 @@
+{
+  "name": "WalletActivity",
+  "type": "object",
+  "description": "A single synced on-chain activity event (trade, split, merge, redeem, reward, conversion) for a tracked wallet.",
+  "properties": {
+    "wallet_address": {
+      "type": "string",
+      "description": "Lowercased wallet address this event belongs to"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": ["TRADE", "SPLIT", "MERGE", "REDEEM", "REWARD", "CONVERSION"],
+      "description": "Type of on-chain activity"
+    },
+    "side": {
+      "type": "string",
+      "enum": ["BUY", "SELL"],
+      "description": "Trade side, only present for TRADE events"
+    },
+    "market_title": {
+      "type": "string",
+      "description": "Market question/title"
+    },
+    "market_slug": {
+      "type": "string",
+      "description": "Market slug on polymarket.com"
+    },
+    "condition_id": {
+      "type": "string",
+      "description": "Polymarket condition ID for the market"
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Outcome label, e.g. Yes/No"
+    },
+    "outcome_index": {
+      "type": "integer",
+      "description": "Index of the outcome traded"
+    },
+    "price": {
+      "type": "number",
+      "description": "Execution price (0-1) at the time of the event"
+    },
+    "size": {
+      "type": "number",
+      "description": "Size in shares/tokens"
+    },
+    "usdc_size": {
+      "type": "number",
+      "description": "Size in USDC"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event occurred on-chain"
+    },
+    "transaction_hash": {
+      "type": "string",
+      "description": "On-chain transaction hash"
+    },
+    "dedupe_key": {
+      "type": "string",
+      "description": "Deterministic key used to avoid re-inserting the same event on repeated syncs"
+    }
+  },
+  "required": ["wallet_address", "event_type", "occurred_at", "dedupe_key"],
+  "rls": {
+    "create": true,
+    "read": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "delete": {
+      "$or": [
+        { "user_condition": { "id": "{{user.id}}" } },
+        { "user_condition": { "role": "admin" } }
+      ]
+    }
+  }
+}
