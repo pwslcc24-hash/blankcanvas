@@ -197,6 +197,16 @@ export default function WalletDetail() {
                 </div>
               </div>
               <div>
+                <div className="text-muted-foreground">Calibration edge</div>
+                <div className={`font-medium ${Number(score.calibration_edge) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                  {Number(score.calibration_edge) >= 0 ? "+" : ""}
+                  {(Number(score.calibration_edge) * 100).toFixed(1)} pts
+                  <span className="text-xs text-muted-foreground ml-1">
+                    ({score.calibrated_market_count} markets)
+                  </span>
+                </div>
+              </div>
+              <div>
                 <div className="text-muted-foreground">Realized profit</div>
                 <div className={`font-medium ${Number(score.realized_profit_usd) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
                   {usd(score.realized_profit_usd)}
@@ -236,6 +246,8 @@ export default function WalletDetail() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground mt-4">
+              Calibration edge compares actual wins against the price the wallet paid — buying favorites at a high
+              price and winning often scores near zero here, since that's the market being right, not skill.
               Out-of-sample metrics only count markets first traded after you started tracking this wallet — the
               honest forward-test signal. Scores from fewer than ~30 closed markets should be treated as provisional.
             </p>
@@ -319,6 +331,7 @@ export default function WalletDetail() {
                       <TableHead>Size</TableHead>
                       <TableHead>Avg price</TableHead>
                       <TableHead>Current price</TableHead>
+                      <TableHead>Paid</TableHead>
                       <TableHead>Value</TableHead>
                       <TableHead>PnL</TableHead>
                     </TableRow>
@@ -345,6 +358,7 @@ export default function WalletDetail() {
                         <TableCell>{Number(p.size || 0).toLocaleString()}</TableCell>
                         <TableCell>{p.avg_price != null ? `$${Number(p.avg_price).toFixed(3)}` : "—"}</TableCell>
                         <TableCell>{p.current_price != null ? `$${Number(p.current_price).toFixed(3)}` : "—"}</TableCell>
+                        <TableCell>{usd(p.initial_value_usd)}</TableCell>
                         <TableCell>{usd(p.current_value_usd)}</TableCell>
                         <TableCell className={Number(p.cash_pnl_usd || 0) >= 0 ? "text-emerald-600" : "text-red-600"}>
                           {usd(p.cash_pnl_usd)}

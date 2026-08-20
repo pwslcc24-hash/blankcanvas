@@ -68,6 +68,14 @@
     "oos_win_rate": {
       "type": "number",
       "description": "Win rate on out-of-sample closed markets (0-1)"
+    },
+    "calibration_edge": {
+      "type": "number",
+      "description": "Average of (actual win - implied probability from average entry price) across calibrated closed markets. Positive means the wallet wins more than the price it paid implied, which is the real skill signal — a high win rate from buying favorites at high prices scores near zero here."
+    },
+    "calibrated_market_count": {
+      "type": "integer",
+      "description": "Closed markets with a usable buy price (excludes markets entered only via SPLIT) used to compute calibration_edge"
     }
   },
   "required": ["wallet_address", "computed_at", "score"],
