@@ -184,13 +184,16 @@ async function simulatePresets(
           existing.status === trade.status &&
           existing.pnl_usd === trade.pnl_usd &&
           existing.entry_price === trade.entry_price;
-        if (!unchanged) {
-          await base44.entities.PaperTrade.update(existing.id, {
-            ...trade,
-            strategy_id: preset.strategy_id,
-            is_backtest: true,
-          });
-        }
+          if (!unchanged) {
+            await base44.entities.PaperTrade.update(existing.id, {
+              ...trade,
+              strategy_id: preset.strategy_id,
+              is_backtest: true,
+              pnl_usd: trade.pnl_usd ?? null,
+              exit_at: trade.exit_at ?? null,
+              exit_price: trade.exit_price ?? null,
+            });
+          }
       } else {
         const created = await base44.entities.PaperTrade.create({
           ...trade,

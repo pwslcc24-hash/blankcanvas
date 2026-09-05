@@ -243,7 +243,9 @@ function TradeTable({ trades }) {
                   )}
                 </TableCell>
                 <TableCell className="text-right text-sm font-medium">
-                  {t.pnl_usd != null ? (
+                  {t.status === "open" ? (
+                    <span className="text-muted-foreground">pending</span>
+                  ) : t.pnl_usd != null ? (
                     <span className={t.pnl_usd >= 0 ? "text-emerald-600" : "text-red-600"}>
                       {t.pnl_usd >= 0 ? "+" : ""}
                       {usd(t.pnl_usd)}

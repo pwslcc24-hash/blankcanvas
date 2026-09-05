@@ -271,6 +271,10 @@ export function simulatePaperTrade(
     trade.exit_at = resolution.exit_at;
     trade.exit_price = exitPrice;
     trade.pnl_usd = Math.round((proceeds - stake) * 100) / 100;
+  } else {
+    trade.exit_at = undefined;
+    trade.exit_price = undefined;
+    trade.pnl_usd = undefined;
   }
 
   return trade;
