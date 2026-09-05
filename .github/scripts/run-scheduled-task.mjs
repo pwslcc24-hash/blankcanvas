@@ -63,7 +63,7 @@ for (const name of functionNames) {
       if (name === "sync-batch" || name === "score-batch") {
         payload = { runStartedAt };
       } else if (name === "backtest-strategies") {
-        payload = { full: true };
+        payload = { force: true };
       }
 
       const res = await base44.functions.invoke(name, payload);

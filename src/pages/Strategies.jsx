@@ -312,23 +312,28 @@ export default function Strategies() {
   const runBacktest = useCallback(async () => {
     setBacktesting(true);
     try {
-      const res = await base44.functions.invoke("backtest-strategies", { full: true });
+      const res = await base44.functions.invoke("backtest-strategies", {});
       const data = res.data || {};
       const allSummary = data.summary || [];
       const top = [...allSummary].sort((a, b) => (b.roi || 0) - (a.roi || 0))[0];
+      const simulated = data.simulated || 0;
       toast({
-        title: "Backtest complete",
+        title: simulated > 0 ? "Backtest updated" : "Rankings refreshed",
         description: top
-          ? `Best: ${top.name} — ROI ${pct(top.roi)}, ${top.resolved_trades} resolved trades`
-          : `${allSummary.length} strategies tested`,
+          ? `Best: ${top.name} — ${pct(top.roi)} return, ${top.resolved_trades} finished trades${
+              simulated > 0 ? ` · ${simulated} new strategies tested` : ""
+            }`
+          : "Stats updated from saved trades",
       });
       await load();
     } catch (err) {
+      const msg = err?.response?.data?.error || err?.message || String(err);
       toast({
-        title: "Backtest failed",
-        description: err?.response?.data?.error || err?.message || String(err),
+        title: /rate limit/i.test(msg) ? "Slow down — try again in 2 min" : "Backtest failed",
+        description: msg,
         variant: "destructive",
       });
+      await load();
     } finally {
       setBacktesting(false);
     }
