@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,8 +41,10 @@ function pct(value) {
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
 
-function cents(price) {
+function cents(price, status) {
   if (price == null || !Number.isFinite(Number(price))) return "—";
+  if (status === "lost" && price === 0) return "0¢ (you lost)";
+  if (status === "won" && price === 1) return "100¢ (you won)";
   return `${(Number(price) * 100).toFixed(1)}¢`;
 }
 
@@ -54,15 +56,6 @@ function formatWhen(iso) {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-function timeAgo(iso) {
-  if (!iso) return "Never";
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const hours = Math.round(diffMs / 3600000);
-  if (hours < 1) return "Just now";
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
 }
 
 function parseParams(strategy) {
@@ -104,8 +97,174 @@ function moneyOut(trade) {
   return null;
 }
 
-function moneyIn(trade) {
-  return Number(trade.stake_usd || 0);
+function statsFromTrades(trades) {
+  const resolved = trades.filter((t) => t.status === "won" || t.status === "lost");
+  const staked = resolved.reduce((s, t) => s + Number(t.stake_usd || 0), 0);
+  const pnl = resolved.reduce((s, t) => s + Number(t.pnl_usd || 0), 0);
+  const wins = resolved.filter((t) => t.status === "won").length;
+  return {
+    total: trades.length,
+    resolved: resolved.length,
+    open: trades.filter((t) => t.status === "open").length,
+    staked,
+    pnl,
+    gotBack: staked + pnl,
+    roi: staked > 0 ? pnl / staked : null,
+    winRate: resolved.length > 0 ? wins / resolved.length : null,
+    wins,
+    losses: resolved.length - wins,
+  };
+}
+
+function MoneySummary({ title, subtitle, stats, stakePerTrade }) {
+  if (stats.resolved === 0 && stats.open === 0) {
+    return (
+      <Card className="bg-muted/20">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{title}</CardTitle>
+          <CardDescription>{subtitle}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">No trades yet — this strategy didn&apos;t get any signals.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const profitable = (stats.pnl || 0) >= 0;
+
+  return (
+    <Card className={cn(title.includes("Live") ? "border-amber-500/30" : "border-blue-500/30")}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{title}</CardTitle>
+        <CardDescription>{subtitle}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {stats.resolved > 0 ? (
+          <div className="rounded-lg border bg-background p-4 space-y-2 text-sm">
+            <p>
+              <strong className="text-foreground">{stats.resolved} finished trades</strong>
+              {" "}× {usd(stakePerTrade)} each ={" "}
+              <strong className="text-foreground">{usd(stats.staked)} total bet</strong>
+            </p>
+            <p>
+              You got back <strong className="text-foreground">{usd(stats.gotBack)}</strong>
+              {" "}(your {usd(stats.staked)} back {profitable ? "plus" : "minus"}{" "}
+              {usd(Math.abs(stats.pnl))} {profitable ? "profit" : "loss"}).
+            </p>
+            <p className={cn("font-semibold text-base", profitable ? "text-emerald-600" : "text-red-600")}>
+              Net: {profitable ? "+" : ""}
+              {usd(stats.pnl)} ({pct(stats.roi)} return)
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {stats.wins} wins · {stats.losses} losses · {pct(stats.winRate)} win rate
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No finished trades yet — {stats.open} still open.</p>
+        )}
+        {stats.open > 0 && (
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            {stats.open} trade(s) still open — not counted in profit until they finish.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TradeTable({ trades }) {
+  if (!trades.length) {
+    return <p className="text-sm text-muted-foreground px-6 py-8 text-center">No trades in this view.</p>;
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Entered</TableHead>
+          <TableHead>Finished</TableHead>
+          <TableHead>Market</TableHead>
+          <TableHead>Bet</TableHead>
+          <TableHead className="text-right">
+            <span className="inline-flex items-center gap-1">
+              <ArrowDownLeft className="w-3 h-3" /> Put in
+            </span>
+          </TableHead>
+          <TableHead className="text-right">
+            <span className="inline-flex items-center gap-1">
+              <ArrowUpRight className="w-3 h-3" /> Got back
+            </span>
+          </TableHead>
+          <TableHead className="text-right">Profit/Loss</TableHead>
+          <TableHead>Result</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {trades.map((t) => {
+          const out = moneyOut(t);
+          const statusLabel = t.status === "won" ? "Won" : t.status === "lost" ? "Lost" : "Open";
+          return (
+            <TableRow key={t.id}>
+              <TableCell className="whitespace-nowrap text-sm">
+                <div>{formatWhen(t.entry_at)}</div>
+                <div className="text-xs text-muted-foreground">bought @ {cents(t.entry_price)}</div>
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-sm">
+                {t.status === "open" ? (
+                  <span className="text-amber-600">Waiting…</span>
+                ) : (
+                  <>
+                    <div>{formatWhen(t.exit_at)}</div>
+                    <div className="text-xs text-muted-foreground">settled @ {cents(t.exit_price, t.status)}</div>
+                  </>
+                )}
+              </TableCell>
+              <TableCell className="max-w-[180px]">
+                <p className="truncate text-sm" title={t.market_title}>
+                  {t.market_title || "Unknown market"}
+                </p>
+                <p className="text-xs text-muted-foreground">{t.wallet_count} wallets agreed</p>
+              </TableCell>
+              <TableCell className="text-sm">{t.outcome || "—"}</TableCell>
+              <TableCell className="text-right text-sm">{usd(t.stake_usd)}</TableCell>
+              <TableCell className="text-right text-sm">
+                {t.status === "open" ? (
+                  <span className="text-muted-foreground">pending</span>
+                ) : t.status === "lost" ? (
+                  <span className="text-red-600">$0.00</span>
+                ) : (
+                  usd(out)
+                )}
+              </TableCell>
+              <TableCell className="text-right text-sm font-medium">
+                {t.pnl_usd != null ? (
+                  <span className={t.pnl_usd >= 0 ? "text-emerald-600" : "text-red-600"}>
+                    {t.pnl_usd >= 0 ? "+" : ""}
+                    {usd(t.pnl_usd)}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">pending</span>
+                )}
+              </TableCell>
+              <TableCell>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    t.status === "won" && "text-emerald-600 border-emerald-500/30",
+                    t.status === "lost" && "text-red-600 border-red-500/30",
+                    t.status === "open" && "text-amber-600 border-amber-500/30"
+                  )}
+                >
+                  {statusLabel}
+                </Badge>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
 }
 
 export default function Strategies() {
@@ -114,6 +273,7 @@ export default function Strategies() {
   const [loading, setLoading] = useState(true);
   const [backtesting, setBacktesting] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  const [tradeFilter, setTradeFilter] = useState("finished");
 
   const load = useCallback(async () => {
     try {
@@ -123,7 +283,10 @@ export default function Strategies() {
       ]);
       setStrategies(s);
       setTrades(t);
-      if (!selectedId && s.length) setSelectedId(s[0].strategy_id);
+      if (!selectedId && s.length) {
+        const withTrades = s.filter((x) => (x.total_trades || 0) > 0);
+        setSelectedId((withTrades[0] || s[0]).strategy_id);
+      }
     } catch (err) {
       toast({
         title: "Failed to load strategies",
@@ -166,13 +329,43 @@ export default function Strategies() {
 
   const selected = strategies.find((s) => s.strategy_id === selectedId);
   const selectedParams = parseParams(selected);
-  const selectedTrades = trades.filter((t) => t.strategy_id === selectedId);
-  const forwardTrades = selectedTrades.filter((t) => !t.is_backtest);
-  const backtestTrades = selectedTrades.filter((t) => t.is_backtest);
+  const stakePerTrade = selectedParams.stakeUsd || 100;
 
-  const resolved = strategies.filter((s) => (s.resolved_trades || 0) >= 5);
-  const best = resolved.length
-    ? [...resolved].sort((a, b) => (b.roi || 0) - (a.roi || 0))[0]
+  const selectedTrades = useMemo(
+    () => trades.filter((t) => t.strategy_id === selectedId),
+    [trades, selectedId]
+  );
+  const backtestTrades = useMemo(() => selectedTrades.filter((t) => t.is_backtest), [selectedTrades]);
+  const liveTrades = useMemo(() => selectedTrades.filter((t) => !t.is_backtest), [selectedTrades]);
+  const backtestStats = useMemo(() => statsFromTrades(backtestTrades), [backtestTrades]);
+  const liveStats = useMemo(() => statsFromTrades(liveTrades), [liveTrades]);
+
+  const filteredTrades = useMemo(() => {
+    let list = selectedTrades;
+    if (tradeFilter === "finished") {
+      list = list.filter((t) => t.status === "won" || t.status === "lost");
+    } else if (tradeFilter === "open") {
+      list = list.filter((t) => t.status === "open");
+    } else if (tradeFilter === "live") {
+      list = list.filter((t) => !t.is_backtest);
+    } else if (tradeFilter === "past") {
+      list = list.filter((t) => t.is_backtest);
+    }
+    return list;
+  }, [selectedTrades, tradeFilter]);
+
+  const sortedStrategies = useMemo(() => {
+    return [...strategies].sort((a, b) => {
+      const aHas = (a.total_trades || 0) > 0 ? 1 : 0;
+      const bHas = (b.total_trades || 0) > 0 ? 1 : 0;
+      if (bHas !== aHas) return bHas - aHas;
+      return (b.roi || 0) - (a.roi || 0);
+    });
+  }, [strategies]);
+
+  const proven = strategies.filter((s) => (s.resolved_trades || 0) >= 5);
+  const best = proven.length
+    ? [...proven].sort((a, b) => (b.roi || 0) - (a.roi || 0))[0]
     : null;
 
   return (
@@ -184,8 +377,8 @@ export default function Strategies() {
             Strategy lab
           </h1>
           <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-            Fake-trades 21 copy-trading rules to see which would make money. New alerts are paper-traded
-            automatically every 30 minutes — no real money yet.
+            Fake money only. <strong className="text-foreground">Past test</strong> = last 30 days replayed.{" "}
+            <strong className="text-foreground">Live paper</strong> = new trades from here on out.
           </p>
         </div>
         <Button onClick={runBacktest} disabled={backtesting}>
@@ -203,11 +396,11 @@ export default function Strategies() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <Trophy className="w-4 h-4 text-emerald-600" />
-              Best so far (5+ finished trades)
+              Best past test (5+ finished trades)
             </CardTitle>
             <CardDescription>
-              {best.name} — {pct(best.roi)} return, {pct(best.win_rate)} wins, {usd(best.total_pnl_usd)} profit
-              on {best.resolved_trades} trades
+              {best.name} — bet {usd(best.total_staked_usd)}, got back{" "}
+              {usd((best.total_staked_usd || 0) + (best.total_pnl_usd || 0))}, kept {usd(best.total_pnl_usd)} profit
             </CardDescription>
           </CardHeader>
         </Card>
@@ -217,7 +410,7 @@ export default function Strategies() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>All strategies</CardTitle>
-            <CardDescription>Click one to see what it does and every fake trade.</CardDescription>
+            <CardDescription>Strategies with no signals yet are at the bottom.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             {loading ? (
@@ -231,57 +424,59 @@ export default function Strategies() {
               </div>
             ) : (
               <div className="divide-y max-h-[520px] overflow-y-auto">
-                {[...strategies]
-                  .sort((a, b) => (b.roi || 0) - (a.roi || 0))
-                  .map((s, i) => {
-                    const isSelected = selectedId === s.strategy_id;
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setSelectedId(s.strategy_id)}
-                        className={cn(
-                          "w-full text-left px-4 py-3 transition-colors border-l-4",
-                          isSelected
-                            ? "bg-primary/10 border-l-primary"
-                            : "border-l-transparent hover:bg-muted/50"
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              {i === 0 && (s.resolved_trades || 0) >= 5 && (
-                                <Trophy className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                              )}
-                              <p className={cn("font-medium text-sm truncate", isSelected && "text-primary")}>
-                                {s.name}
-                              </p>
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {s.resolved_trades || 0} finished · {(s.open_trades || 0) > 0 ? `${s.open_trades} open · ` : ""}
-                              {pct(s.win_rate)} win rate
+                {sortedStrategies.map((s, i) => {
+                  const isSelected = selectedId === s.strategy_id;
+                  const hasTrades = (s.total_trades || 0) > 0;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setSelectedId(s.strategy_id)}
+                      className={cn(
+                        "w-full text-left px-4 py-3 transition-colors border-l-4",
+                        isSelected
+                          ? "bg-primary/10 border-l-primary"
+                          : "border-l-transparent hover:bg-muted/50",
+                        !hasTrades && "opacity-60"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            {i === 0 && hasTrades && (s.resolved_trades || 0) >= 5 && (
+                              <Trophy className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                            )}
+                            <p className={cn("font-medium text-sm truncate", isSelected && "text-primary")}>
+                              {s.name}
                             </p>
                           </div>
-                          <div className="text-right shrink-0">
-                            <p
-                              className={cn(
-                                "text-sm font-semibold",
-                                (s.roi || 0) >= 0 ? "text-emerald-600" : "text-red-600"
-                              )}
-                            >
-                              {pct(s.roi)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">{usd(s.total_pnl_usd)}</p>
-                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {!hasTrades
+                              ? "No signals yet"
+                              : `${s.resolved_trades || 0} finished · ${s.open_trades || 0} open`}
+                          </p>
                         </div>
-                        {(s.resolved_trades || 0) < 5 && (
-                          <Badge variant="outline" className="text-xs mt-2">
-                            too few trades to trust
-                          </Badge>
-                        )}
-                      </button>
-                    );
-                  })}
+                        <div className="text-right shrink-0">
+                          {!hasTrades || (s.resolved_trades || 0) === 0 ? (
+                            <p className="text-xs text-muted-foreground">—</p>
+                          ) : (
+                            <>
+                              <p
+                                className={cn(
+                                  "text-sm font-semibold",
+                                  (s.roi || 0) >= 0 ? "text-emerald-600" : "text-red-600"
+                                )}
+                              >
+                                {pct(s.roi)}
+                              </p>
+                              <p className="text-xs text-muted-foreground">{usd(s.total_pnl_usd)} profit</p>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -296,179 +491,58 @@ export default function Strategies() {
                   {describeStrategy(selectedParams)}
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">Per trade</p>
-                    <p className="text-lg font-semibold">{usd(selectedParams.stakeUsd || 100)}</p>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">Total put in</p>
-                    <p className="text-lg font-semibold">{usd(selected.total_staked_usd)}</p>
-                    <p className="text-xs text-muted-foreground">finished trades only</p>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">Net profit/loss</p>
-                    <p
-                      className={cn(
-                        "text-lg font-semibold",
-                        (selected.total_pnl_usd || 0) >= 0 ? "text-emerald-600" : "text-red-600"
-                      )}
-                    >
-                      {usd(selected.total_pnl_usd)}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">Return</p>
-                    <p
-                      className={cn(
-                        "text-lg font-semibold",
-                        (selected.roi || 0) >= 0 ? "text-emerald-600" : "text-red-600"
-                      )}
-                    >
-                      {pct(selected.roi)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">avg {usd(selected.avg_pnl_usd)}/trade</p>
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground mt-3">
-                  {forwardTrades.length > 0
-                    ? `${forwardTrades.length} live paper trade(s) from new alerts since deploy.`
-                    : "Live paper trades will appear here when new consensus alerts fire (every ~30 min)."}
-                  {" "}
-                  {backtestTrades.length > 0 && `${backtestTrades.length} past test trade(s) from the last 30 days.`}
-                </p>
-              </CardContent>
             </Card>
+
+            <MoneySummary
+              title="Past test (last 30 days)"
+              subtitle="Replayed history — this is where the big profit numbers come from."
+              stats={backtestStats}
+              stakePerTrade={stakePerTrade}
+            />
+
+            <MoneySummary
+              title="Live paper (since deploy)"
+              subtitle="Real test going forward — watch this section over the next few weeks."
+              stats={liveStats}
+              stakePerTrade={stakePerTrade}
+            />
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Trade history</CardTitle>
-                <CardDescription>
-                  Every fake buy — when it entered, when it settled, money in vs money out.
-                </CardDescription>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base">Trade history</CardTitle>
+                    <CardDescription>
+                      $0 got back = you lost that bet. Pending = market not finished yet.
+                    </CardDescription>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { id: "finished", label: "Finished only" },
+                      { id: "open", label: "Open only" },
+                      { id: "live", label: "Live paper" },
+                      { id: "past", label: "Past test" },
+                      { id: "all", label: "All" },
+                    ].map(({ id, label }) => (
+                      <Button
+                        key={id}
+                        size="sm"
+                        variant={tradeFilter === id ? "default" : "outline"}
+                        onClick={() => setTradeFilter(id)}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
               </CardHeader>
               <CardContent className="p-0 overflow-x-auto">
-                {selectedTrades.length === 0 ? (
-                  <p className="text-sm text-muted-foreground px-6 py-8 text-center">
-                    No trades for this strategy yet.
-                  </p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Entered</TableHead>
-                        <TableHead>Resolved</TableHead>
-                        <TableHead>Market</TableHead>
-                        <TableHead>Bet</TableHead>
-                        <TableHead className="text-right">
-                          <span className="inline-flex items-center gap-1">
-                            <ArrowDownLeft className="w-3 h-3" /> Put in
-                          </span>
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <span className="inline-flex items-center gap-1">
-                            <ArrowUpRight className="w-3 h-3" /> Got out
-                          </span>
-                        </TableHead>
-                        <TableHead className="text-right">Profit/Loss</TableHead>
-                        <TableHead>Result</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {selectedTrades.slice(0, 50).map((t) => {
-                        const out = moneyOut(t);
-                        const statusLabel =
-                          t.status === "won" ? "Won" : t.status === "lost" ? "Lost" : "Open";
-                        return (
-                          <TableRow key={t.id}>
-                            <TableCell className="whitespace-nowrap text-sm">
-                              <div>{formatWhen(t.entry_at)}</div>
-                              <div className="text-xs text-muted-foreground">@ {cents(t.entry_price)}</div>
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap text-sm">
-                              {t.status === "open" ? (
-                                <span className="text-amber-600">Still open</span>
-                              ) : (
-                                <>
-                                  <div>{formatWhen(t.exit_at)}</div>
-                                  <div className="text-xs text-muted-foreground">
-                                    @ {cents(t.exit_price)}
-                                  </div>
-                                </>
-                              )}
-                            </TableCell>
-                            <TableCell className="max-w-[180px]">
-                              <p className="truncate text-sm" title={t.market_title}>
-                                {t.market_title || "Unknown market"}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {t.wallet_count} wallets agreed
-                                {!t.is_backtest && " · live paper"}
-                              </p>
-                            </TableCell>
-                            <TableCell className="text-sm">{t.outcome || "—"}</TableCell>
-                            <TableCell className="text-right text-sm">
-                              {usd(moneyIn(t))}
-                              {t.fee_usd ? (
-                                <div className="text-xs text-muted-foreground">
-                                  incl. {usd(t.fee_usd)} fee
-                                </div>
-                              ) : null}
-                            </TableCell>
-                            <TableCell className="text-right text-sm">
-                              {out != null ? usd(out) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right text-sm font-medium">
-                              {t.pnl_usd != null ? (
-                                <span className={t.pnl_usd >= 0 ? "text-emerald-600" : "text-red-600"}>
-                                  {t.pnl_usd >= 0 ? "+" : ""}
-                                  {usd(t.pnl_usd)}
-                                </span>
-                              ) : (
-                                "—"
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  t.status === "won" && "text-emerald-600 border-emerald-500/30",
-                                  t.status === "lost" && "text-red-600 border-red-500/30",
-                                  t.status === "open" && "text-amber-600 border-amber-500/30"
-                                )}
-                              >
-                                {statusLabel}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                )}
+                <TradeTable trades={filteredTrades.slice(0, 80)} />
               </CardContent>
             </Card>
           </div>
         )}
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Will it keep trading?</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p>
-            <strong className="text-foreground">Yes.</strong> Every 30 minutes the system syncs wallets,
-            finds new consensus alerts, and opens fake trades for all active strategies. You don&apos;t
-            need to click anything — just check back here to see new rows under &quot;live paper&quot; trades.
-          </p>
-          <p>
-            Past rows are from the 30-day backtest. New rows going forward are the real test of whether a
-            strategy still works.
-          </p>
-        </CardContent>
-      </Card>
     </div>
   );
 }
