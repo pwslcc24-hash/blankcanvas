@@ -19,7 +19,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/use-toast";
+import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, ExternalLink, Loader2, Plus, Sparkles } from "lucide-react";
+
+const GRADE_STYLES = {
+  A: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
+  B: "bg-blue-500/10 text-blue-600 border-blue-500/20",
+  C: "bg-amber-500/10 text-amber-600 border-amber-500/20",
+  D: "bg-orange-500/10 text-orange-600 border-orange-500/20",
+  F: "bg-red-500/10 text-red-600 border-red-500/20",
+};
 
 const CATEGORIES = ["OVERALL", "POLITICS", "SPORTS", "ESPORTS", "CRYPTO", "CULTURE", "ECONOMICS", "TECH", "FINANCE"];
 const TIME_PERIODS = ["DAY", "WEEK", "MONTH", "ALL"];
@@ -42,12 +51,14 @@ export default function Discover() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [trackedAddresses, setTrackedAddresses] = useState(new Set());
+  const [trackedWallets, setTrackedWallets] = useState(new Map());
   const [addingAddress, setAddingAddress] = useState(null);
   const [autoTracking, setAutoTracking] = useState(false);
 
   const loadTracked = useCallback(async () => {
-    const wallets = await base44.entities.TrackedWallet.list(null, 5000, 0, ["address"]);
-    setTrackedAddresses(new Set(wallets.map((w) => w.address)));
+    const wallets = await base44.entities.TrackedWallet.list(null, 5000);
+    setTrackedAddresses(new Set(wallets.map((w) => w.address.toLowerCase())));
+    setTrackedWallets(new Map(wallets.map((w) => [w.address.toLowerCase(), w])));
   }, []);
 
   const loadLeaderboard = useCallback(async () => {
@@ -210,6 +221,7 @@ export default function Discover() {
                 <TableRow>
                   <TableHead>Rank</TableHead>
                   <TableHead>Trader</TableHead>
+                  <TableHead>Grade</TableHead>
                   <TableHead>PnL</TableHead>
                   <TableHead>Volume</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -219,12 +231,24 @@ export default function Discover() {
                 {entries.map((entry, idx) => {
                   const address = (entry.proxyWallet || entry.wallet || "").toLowerCase();
                   const isTracked = trackedAddresses.has(address);
+                  const tracked = trackedWallets.get(address);
                   return (
                     <TableRow key={address || idx}>
                       <TableCell>{entry.rank || idx + 1}</TableCell>
                       <TableCell>
                         <div className="font-medium">{entry.userName || entry.user_name || shortAddress(address)}</div>
                         <div className="text-xs text-muted-foreground font-mono">{shortAddress(address)}</div>
+                      </TableCell>
+                      <TableCell>
+                        {tracked?.skill_grade ? (
+                          <Badge variant="outline" className={GRADE_STYLES[tracked.skill_grade] || ""}>
+                            {tracked.skill_grade} · {Number(tracked.skill_score || 0).toFixed(0)}
+                          </Badge>
+                        ) : isTracked ? (
+                          <span className="text-xs text-muted-foreground">Not scored</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell className={Number(entry.pnl || 0) >= 0 ? "text-emerald-600" : "text-red-600"}>
                         {usd(entry.pnl)}

@@ -15,6 +15,19 @@ import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp } from "lucide-react";
 
+const GRADE_STYLES = {
+  A: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
+  B: "bg-blue-500/10 text-blue-600 border-blue-500/20",
+};
+
+function strategyGradeLabel(params) {
+  if (!params?.grades?.length) return null;
+  if (params.grades.length === 1 && params.grades[0] === "A") {
+    return params.minConfidence === "high" ? "A+" : "A";
+  }
+  return "A/B";
+}
+
 function usd(value) {
   const n = Number(value || 0);
   const sign = n >= 0 ? "" : "-";
@@ -439,6 +452,8 @@ export default function Strategies() {
                 {sortedStrategies.map((s, i) => {
                   const isSelected = selectedId === s.strategy_id;
                   const hasTrades = (s.total_trades || 0) > 0;
+                  const params = parseParams(s);
+                  const gradeLabel = strategyGradeLabel(params);
                   return (
                     <button
                       key={s.id}
@@ -462,11 +477,26 @@ export default function Strategies() {
                               {s.name}
                             </p>
                           </div>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {!hasTrades
-                              ? "No signals"
-                              : `${s.resolved_trades || 0} done · ${s.open_trades || 0} open`}
-                          </p>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <p className="text-xs text-muted-foreground">
+                              {!hasTrades
+                                ? "No signals"
+                                : `${s.resolved_trades || 0} done · ${s.open_trades || 0} open`}
+                            </p>
+                            {gradeLabel && (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-[10px] px-1 py-0 h-4",
+                                  gradeLabel === "A" || gradeLabel === "A+"
+                                    ? GRADE_STYLES.A
+                                    : GRADE_STYLES.B
+                                )}
+                              >
+                                {gradeLabel}
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                         {hasTrades && (s.resolved_trades || 0) > 0 && (
                           <p
