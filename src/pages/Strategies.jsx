@@ -13,15 +13,7 @@ import {
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
-import {
-  ArrowDownLeft,
-  ArrowUpRight,
-  FlaskConical,
-  Loader2,
-  RefreshCw,
-  Trophy,
-  TrendingUp,
-} from "lucide-react";
+import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp } from "lucide-react";
 
 function usd(value) {
   const n = Number(value || 0);
@@ -41,10 +33,8 @@ function pct(value) {
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
 
-function cents(price, status) {
+function cents(price) {
   if (price == null || !Number.isFinite(Number(price))) return "—";
-  if (status === "lost" && price === 0) return "0¢ (you lost)";
-  if (status === "won" && price === 1) return "100¢ (you won)";
   return `${(Number(price) * 100).toFixed(1)}¢`;
 }
 
@@ -73,17 +63,13 @@ function describeStrategy(params) {
       ? "A-grade wallets only"
       : "A or B grade wallets";
   const confLabel = params.minConfidence === "high" ? " (high confidence)" : "";
-  const lines = [
-    `Waits for ${params.minWallets}+ ${gradeLabel}${confLabel} to buy the same side within ${params.windowHours} hours.`,
-    `Uses $${params.stakeUsd} per fake trade (${params.delaySec}s delay, ${(params.slippage * 100).toFixed(1)}¢ slippage, ${(params.feeRate * 100).toFixed(0)}% fee).`,
+  const parts = [
+    `${params.minWallets}+ ${gradeLabel}${confLabel}`,
+    `${params.windowHours}h window`,
+    `$${params.stakeUsd}/trade`,
   ];
-  if (params.minTotalUsdc) {
-    lines.push(`Only trades when skilled wallets put $${params.minTotalUsdc}+ combined into the signal.`);
-  }
-  if (params.maxPriceDrift != null) {
-    lines.push(`Skips signals if price moved more than ${(params.maxPriceDrift * 100).toFixed(0)}¢ from the average entry.`);
-  }
-  return lines.join(" ");
+  if (params.minTotalUsdc) parts.push(`$${params.minTotalUsdc}+ volume`);
+  return parts.join(" · ");
 }
 
 function moneyOut(trade) {
@@ -116,57 +102,77 @@ function statsFromTrades(trades) {
   };
 }
 
-function MoneySummary({ title, subtitle, stats, stakePerTrade }) {
-  if (stats.resolved === 0 && stats.open === 0) {
-    return (
-      <Card className="bg-muted/20">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">{title}</CardTitle>
-          <CardDescription>{subtitle}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">No trades yet — this strategy didn&apos;t get any signals.</p>
-        </CardContent>
-      </Card>
-    );
-  }
+function MetricTile({ label, value, sub, tone }) {
+  return (
+    <div className="rounded-lg border bg-background p-3 min-w-0">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground truncate">{label}</p>
+      <p
+        className={cn(
+          "text-lg font-semibold mt-0.5 truncate",
+          tone === "up" && "text-emerald-600",
+          tone === "down" && "text-red-600"
+        )}
+      >
+        {value}
+      </p>
+      {sub && <p className="text-xs text-muted-foreground mt-0.5 truncate">{sub}</p>}
+    </div>
+  );
+}
 
+function StatsDashboard({ title, hint, variant, stats, stakePerTrade }) {
   const profitable = (stats.pnl || 0) >= 0;
+  const hasData = stats.resolved > 0 || stats.open > 0;
 
   return (
-    <Card className={cn(title.includes("Live") ? "border-amber-500/30" : "border-blue-500/30")}>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">{title}</CardTitle>
-        <CardDescription>{subtitle}</CardDescription>
+    <Card
+      className={cn(
+        variant === "live" ? "border-amber-500/40 bg-amber-500/[0.03]" : "border-blue-500/40 bg-blue-500/[0.03]"
+      )}
+    >
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">{title}</CardTitle>
+          <Badge variant="outline" className="text-xs shrink-0">
+            {variant === "live" ? "Forward test" : "30-day replay"}
+          </Badge>
+        </div>
+        <CardDescription>{hint}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {stats.resolved > 0 ? (
-          <div className="rounded-lg border bg-background p-4 space-y-2 text-sm">
-            <p>
-              <strong className="text-foreground">{stats.resolved} finished trades</strong>
-              {" "}× {usd(stakePerTrade)} each ={" "}
-              <strong className="text-foreground">{usd(stats.staked)} total bet</strong>
-            </p>
-            <p>
-              You got back <strong className="text-foreground">{usd(stats.gotBack)}</strong>
-              {" "}(your {usd(stats.staked)} back {profitable ? "plus" : "minus"}{" "}
-              {usd(Math.abs(stats.pnl))} {profitable ? "profit" : "loss"}).
-            </p>
-            <p className={cn("font-semibold text-base", profitable ? "text-emerald-600" : "text-red-600")}>
-              Net: {profitable ? "+" : ""}
-              {usd(stats.pnl)} ({pct(stats.roi)} return)
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {stats.wins} wins · {stats.losses} losses · {pct(stats.winRate)} win rate
-            </p>
-          </div>
+      <CardContent>
+        {!hasData ? (
+          <p className="text-sm text-muted-foreground">No trades yet.</p>
         ) : (
-          <p className="text-sm text-muted-foreground">No finished trades yet — {stats.open} still open.</p>
-        )}
-        {stats.open > 0 && (
-          <p className="text-xs text-amber-700 dark:text-amber-400">
-            {stats.open} trade(s) still open — not counted in profit until they finish.
-          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <MetricTile label="Finished" value={stats.resolved} sub={`${stakePerTrade}/trade`} />
+            <MetricTile label="Open" value={stats.open} sub={stats.open ? "pending" : "none"} />
+            <MetricTile label="Total bet" value={stats.resolved > 0 ? usd(stats.staked) : "—"} />
+            <MetricTile
+              label="Got back"
+              value={stats.resolved > 0 ? usd(stats.gotBack) : "—"}
+            />
+            <MetricTile
+              label="Net P/L"
+              value={stats.resolved > 0 ? usd(stats.pnl) : "—"}
+              tone={stats.resolved > 0 ? (profitable ? "up" : "down") : undefined}
+            />
+            <MetricTile
+              label="Return"
+              value={stats.resolved > 0 ? pct(stats.roi) : "—"}
+              tone={stats.resolved > 0 ? (profitable ? "up" : "down") : undefined}
+            />
+            <MetricTile
+              label="Win rate"
+              value={stats.resolved > 0 ? pct(stats.winRate) : "—"}
+              sub={stats.resolved > 0 ? `${stats.wins}W · ${stats.losses}L` : undefined}
+            />
+            <MetricTile
+              label="Avg/trade"
+              value={
+                stats.resolved > 0 ? usd(stats.pnl / stats.resolved) : "—"
+              }
+            />
+          </div>
         )}
       </CardContent>
     </Card>
@@ -179,91 +185,92 @@ function TradeTable({ trades }) {
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Entered</TableHead>
-          <TableHead>Finished</TableHead>
-          <TableHead>Market</TableHead>
-          <TableHead>Bet</TableHead>
-          <TableHead className="text-right">
-            <span className="inline-flex items-center gap-1">
-              <ArrowDownLeft className="w-3 h-3" /> Put in
-            </span>
-          </TableHead>
-          <TableHead className="text-right">
-            <span className="inline-flex items-center gap-1">
-              <ArrowUpRight className="w-3 h-3" /> Got back
-            </span>
-          </TableHead>
-          <TableHead className="text-right">Profit/Loss</TableHead>
-          <TableHead>Result</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {trades.map((t) => {
-          const out = moneyOut(t);
-          const statusLabel = t.status === "won" ? "Won" : t.status === "lost" ? "Lost" : "Open";
-          return (
-            <TableRow key={t.id}>
-              <TableCell className="whitespace-nowrap text-sm">
-                <div>{formatWhen(t.entry_at)}</div>
-                <div className="text-xs text-muted-foreground">bought @ {cents(t.entry_price)}</div>
-              </TableCell>
-              <TableCell className="whitespace-nowrap text-sm">
-                {t.status === "open" ? (
-                  <span className="text-amber-600">Waiting…</span>
-                ) : (
-                  <>
-                    <div>{formatWhen(t.exit_at)}</div>
-                    <div className="text-xs text-muted-foreground">settled @ {cents(t.exit_price, t.status)}</div>
-                  </>
-                )}
-              </TableCell>
-              <TableCell className="max-w-[180px]">
-                <p className="truncate text-sm" title={t.market_title}>
-                  {t.market_title || "Unknown market"}
-                </p>
-                <p className="text-xs text-muted-foreground">{t.wallet_count} wallets agreed</p>
-              </TableCell>
-              <TableCell className="text-sm">{t.outcome || "—"}</TableCell>
-              <TableCell className="text-right text-sm">{usd(t.stake_usd)}</TableCell>
-              <TableCell className="text-right text-sm">
-                {t.status === "open" ? (
-                  <span className="text-muted-foreground">pending</span>
-                ) : t.status === "lost" ? (
-                  <span className="text-red-600">$0.00</span>
-                ) : (
-                  usd(out)
-                )}
-              </TableCell>
-              <TableCell className="text-right text-sm font-medium">
-                {t.pnl_usd != null ? (
-                  <span className={t.pnl_usd >= 0 ? "text-emerald-600" : "text-red-600"}>
-                    {t.pnl_usd >= 0 ? "+" : ""}
-                    {usd(t.pnl_usd)}
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">pending</span>
-                )}
-              </TableCell>
-              <TableCell>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    t.status === "won" && "text-emerald-600 border-emerald-500/30",
-                    t.status === "lost" && "text-red-600 border-red-500/30",
-                    t.status === "open" && "text-amber-600 border-amber-500/30"
+    <div className="w-full overflow-x-auto">
+      <Table className="min-w-[1100px] w-full">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[130px]">Entered</TableHead>
+            <TableHead className="w-[130px]">Finished</TableHead>
+            <TableHead className="min-w-[220px]">Market</TableHead>
+            <TableHead className="w-[100px]">Bet</TableHead>
+            <TableHead className="w-[90px] text-right">Put in</TableHead>
+            <TableHead className="w-[90px] text-right">Got back</TableHead>
+            <TableHead className="w-[90px] text-right">P/L</TableHead>
+            <TableHead className="w-[80px]">Result</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {trades.map((t) => {
+            const out = moneyOut(t);
+            const statusLabel = t.status === "won" ? "Won" : t.status === "lost" ? "Lost" : "Open";
+            return (
+              <TableRow key={t.id}>
+                <TableCell className="text-sm whitespace-nowrap">
+                  {formatWhen(t.entry_at)}
+                  <span className="text-muted-foreground"> · {cents(t.entry_price)}</span>
+                </TableCell>
+                <TableCell className="text-sm whitespace-nowrap">
+                  {t.status === "open" ? (
+                    <span className="text-amber-600">Open</span>
+                  ) : (
+                    <>
+                      {formatWhen(t.exit_at)}
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {t.status === "lost" ? "0¢" : cents(t.exit_price)}
+                      </span>
+                    </>
                   )}
-                >
-                  {statusLabel}
-                </Badge>
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+                </TableCell>
+                <TableCell>
+                  <p className="text-sm truncate max-w-[320px]" title={t.market_title}>
+                    {t.market_title || "Unknown market"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t.wallet_count} wallets
+                    {!t.is_backtest && " · live"}
+                  </p>
+                </TableCell>
+                <TableCell className="text-sm">{t.outcome || "—"}</TableCell>
+                <TableCell className="text-right text-sm">{usd(t.stake_usd)}</TableCell>
+                <TableCell className="text-right text-sm">
+                  {t.status === "open" ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : t.status === "lost" ? (
+                    <span className="text-red-600">$0.00</span>
+                  ) : (
+                    usd(out)
+                  )}
+                </TableCell>
+                <TableCell className="text-right text-sm font-medium">
+                  {t.pnl_usd != null ? (
+                    <span className={t.pnl_usd >= 0 ? "text-emerald-600" : "text-red-600"}>
+                      {t.pnl_usd >= 0 ? "+" : ""}
+                      {usd(t.pnl_usd)}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-xs",
+                      t.status === "won" && "text-emerald-600 border-emerald-500/30",
+                      t.status === "lost" && "text-red-600 border-red-500/30",
+                      t.status === "open" && "text-amber-600 border-amber-500/30"
+                    )}
+                  >
+                    {statusLabel}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
 
@@ -369,16 +376,15 @@ export default function Strategies() {
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <FlaskConical className="w-6 h-6 text-primary" />
             Strategy lab
           </h1>
-          <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-            Fake money only. <strong className="text-foreground">Past test</strong> = last 30 days replayed.{" "}
-            <strong className="text-foreground">Live paper</strong> = new trades from here on out.
+          <p className="text-muted-foreground text-sm mt-1">
+            Fake money only · Past test = history replay · Live paper = new trades going forward
           </p>
         </div>
         <Button onClick={runBacktest} disabled={backtesting}>
@@ -396,21 +402,20 @@ export default function Strategies() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <Trophy className="w-4 h-4 text-emerald-600" />
-              Best past test (5+ finished trades)
+              Best past test
             </CardTitle>
             <CardDescription>
-              {best.name} — bet {usd(best.total_staked_usd)}, got back{" "}
-              {usd((best.total_staked_usd || 0) + (best.total_pnl_usd || 0))}, kept {usd(best.total_pnl_usd)} profit
+              {best.name} — {usd(best.total_staked_usd)} bet → {usd(best.total_pnl_usd)} profit (
+              {pct(best.roi)})
             </CardDescription>
           </CardHeader>
         </Card>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>All strategies</CardTitle>
-            <CardDescription>Strategies with no signals yet are at the bottom.</CardDescription>
+      <div className="grid gap-6 lg:grid-cols-12">
+        <Card className="lg:col-span-3 xl:col-span-3">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Strategies</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {loading ? (
@@ -420,10 +425,10 @@ export default function Strategies() {
             ) : strategies.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground px-4">
                 <TrendingUp className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                <p>No strategies yet. Run a backtest first.</p>
+                <p>No strategies yet.</p>
               </div>
             ) : (
-              <div className="divide-y max-h-[520px] overflow-y-auto">
+              <div className="divide-y max-h-[640px] overflow-y-auto">
                 {sortedStrategies.map((s, i) => {
                   const isSelected = selectedId === s.strategy_id;
                   const hasTrades = (s.total_trades || 0) > 0;
@@ -446,33 +451,26 @@ export default function Strategies() {
                             {i === 0 && hasTrades && (s.resolved_trades || 0) >= 5 && (
                               <Trophy className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                             )}
-                            <p className={cn("font-medium text-sm truncate", isSelected && "text-primary")}>
+                            <p className={cn("font-medium text-sm", isSelected && "text-primary")}>
                               {s.name}
                             </p>
                           </div>
                           <p className="text-xs text-muted-foreground mt-0.5">
                             {!hasTrades
-                              ? "No signals yet"
-                              : `${s.resolved_trades || 0} finished · ${s.open_trades || 0} open`}
+                              ? "No signals"
+                              : `${s.resolved_trades || 0} done · ${s.open_trades || 0} open`}
                           </p>
                         </div>
-                        <div className="text-right shrink-0">
-                          {!hasTrades || (s.resolved_trades || 0) === 0 ? (
-                            <p className="text-xs text-muted-foreground">—</p>
-                          ) : (
-                            <>
-                              <p
-                                className={cn(
-                                  "text-sm font-semibold",
-                                  (s.roi || 0) >= 0 ? "text-emerald-600" : "text-red-600"
-                                )}
-                              >
-                                {pct(s.roi)}
-                              </p>
-                              <p className="text-xs text-muted-foreground">{usd(s.total_pnl_usd)} profit</p>
-                            </>
-                          )}
-                        </div>
+                        {hasTrades && (s.resolved_trades || 0) > 0 && (
+                          <p
+                            className={cn(
+                              "text-sm font-semibold shrink-0",
+                              (s.roi || 0) >= 0 ? "text-emerald-600" : "text-red-600"
+                            )}
+                          >
+                            {pct(s.roi)}
+                          </p>
+                        )}
                       </div>
                     </button>
                   );
@@ -483,45 +481,44 @@ export default function Strategies() {
         </Card>
 
         {selected && (
-          <div className="lg:col-span-3 space-y-4">
-            <Card className="border-primary/40 ring-1 ring-primary/20">
-              <CardHeader>
+          <div className="lg:col-span-9 xl:col-span-9 space-y-4 min-w-0">
+            <Card className="border-primary/30">
+              <CardHeader className="pb-2">
                 <CardTitle>{selected.name}</CardTitle>
-                <CardDescription className="text-foreground/80 leading-relaxed">
-                  {describeStrategy(selectedParams)}
-                </CardDescription>
+                <CardDescription>{describeStrategy(selectedParams)}</CardDescription>
               </CardHeader>
             </Card>
 
-            <MoneySummary
-              title="Past test (last 30 days)"
-              subtitle="Replayed history — this is where the big profit numbers come from."
-              stats={backtestStats}
-              stakePerTrade={stakePerTrade}
-            />
-
-            <MoneySummary
-              title="Live paper (since deploy)"
-              subtitle="Real test going forward — watch this section over the next few weeks."
-              stats={liveStats}
-              stakePerTrade={stakePerTrade}
-            />
+            <div className="grid gap-4 xl:grid-cols-2">
+              <StatsDashboard
+                title="Past test"
+                hint="Last 30 days replayed"
+                variant="past"
+                stats={backtestStats}
+                stakePerTrade={stakePerTrade}
+              />
+              <StatsDashboard
+                title="Live paper"
+                hint="New trades since deploy — watch this"
+                variant="live"
+                stats={liveStats}
+                stakePerTrade={stakePerTrade}
+              />
+            </div>
 
             <Card>
-              <CardHeader>
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                   <div>
                     <CardTitle className="text-base">Trade history</CardTitle>
-                    <CardDescription>
-                      $0 got back = you lost that bet. Pending = market not finished yet.
-                    </CardDescription>
+                    <CardDescription>$0 back = loss · — = still open</CardDescription>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {[
-                      { id: "finished", label: "Finished only" },
-                      { id: "open", label: "Open only" },
-                      { id: "live", label: "Live paper" },
-                      { id: "past", label: "Past test" },
+                      { id: "finished", label: "Finished" },
+                      { id: "open", label: "Open" },
+                      { id: "live", label: "Live" },
+                      { id: "past", label: "Past" },
                       { id: "all", label: "All" },
                     ].map(({ id, label }) => (
                       <Button
@@ -536,8 +533,8 @@ export default function Strategies() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="p-0 overflow-x-auto">
-                <TradeTable trades={filteredTrades.slice(0, 80)} />
+              <CardContent className="p-0 pb-2">
+                <TradeTable trades={filteredTrades.slice(0, 100)} />
               </CardContent>
             </Card>
           </div>

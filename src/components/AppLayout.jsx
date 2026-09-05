@@ -18,7 +18,7 @@ export default function AppLayout() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-[1600px] mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2 font-semibold text-lg">
             <LineChart className="w-5 h-5 text-primary" />
             <span>Wallet Intelligence</span>
@@ -54,7 +54,7 @@ export default function AppLayout() {
           </div>
         </div>
       </header>
-      <main className="max-w-6xl mx-auto px-6 py-8">
+      <main className="max-w-[1600px] mx-auto px-6 py-8">
         <Outlet />
       </main>
     </div>
