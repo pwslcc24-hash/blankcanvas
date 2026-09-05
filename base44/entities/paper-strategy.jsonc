@@ -1,0 +1,75 @@
+{
+  "name": "PaperStrategy",
+  "type": "object",
+  "description": "A named paper-trading strategy variant (consensus parameters + execution assumptions). Stats are refreshed by backtest-strategies.",
+  "properties": {
+    "strategy_id": {
+      "type": "string",
+      "description": "Stable preset key, e.g. baseline-3-ab-6h-strong"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable strategy label"
+    },
+    "params_json": {
+      "type": "string",
+      "description": "JSON strategy parameters (min wallets, window, grades, slippage, etc.)"
+    },
+    "is_active": {
+      "type": "boolean",
+      "description": "Whether forward paper-trading uses this strategy"
+    },
+    "last_backtest_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When stats were last recomputed"
+    },
+    "total_trades": {
+      "type": "integer",
+      "description": "All paper trades taken (resolved + open)"
+    },
+    "resolved_trades": {
+      "type": "integer",
+      "description": "Trades with a known win/loss outcome"
+    },
+    "open_trades": {
+      "type": "integer",
+      "description": "Trades still waiting on market resolution"
+    },
+    "wins": {
+      "type": "integer",
+      "description": "Resolved winning trades"
+    },
+    "losses": {
+      "type": "integer",
+      "description": "Resolved losing trades"
+    },
+    "total_pnl_usd": {
+      "type": "number",
+      "description": "Sum of realized PnL on resolved trades"
+    },
+    "total_staked_usd": {
+      "type": "number",
+      "description": "Sum of stake deployed on resolved trades"
+    },
+    "roi": {
+      "type": "number",
+      "description": "total_pnl / total_staked on resolved trades"
+    },
+    "win_rate": {
+      "type": "number",
+      "description": "wins / resolved_trades (0-1)"
+    },
+    "avg_pnl_usd": {
+      "type": "number",
+      "description": "Average PnL per resolved trade"
+    }
+  },
+  "required": ["strategy_id", "name", "params_json"],
+  "rls": {
+    "create": true,
+    "read": true,
+    "update": true,
+    "delete": true
+  }
+}

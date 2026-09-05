@@ -221,5 +221,7 @@ declare module '@base44/sdk' {
     "score-batch": true;
     "auto-track-leaderboard": true;
     "detect-consensus": true;
+    "backtest-strategies": true;
+    "run-paper-trades": true;
   }
 }

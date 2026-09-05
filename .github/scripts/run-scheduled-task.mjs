@@ -7,13 +7,9 @@
 // then invokes the given functions in order. This is what stands in for
 // Base44's missing built-in cron/scheduler.
 //
-// sync-batch, score-batch, and detect-consensus run in sequence. The first two
-// process bounded batches per call and report `remaining` in their response,
-// until the whole tracked-wallet list has been covered (capped to avoid an
-// infinite loop if something is stuck). Each function gets a fixed
-// `runStartedAt` timestamp shared across its calls so `remaining` reflects
-// wallets not yet touched *this run*, and a short delay between calls avoids
-// bursting past Polymarket's Data API rate limit.
+// sync-batch / score-batch: pass shared runStartedAt, loop while remaining > 0
+// backtest-strategies: paginate with offset until remaining presets = 0
+// detect-consensus / run-paper-trades: single shot per run
 //
 // Required env vars: BASE44_APP_ID, BASE44_BOT_EMAIL, BASE44_BOT_PASSWORD
 // Usage: node run-scheduled-task.mjs <function-name> [<function-name> ...]
@@ -56,14 +52,32 @@ try {
 for (const name of functionNames) {
   const runStartedAt = new Date().toISOString();
   let iteration = 0;
+  let offset = 0;
+
   while (iteration < MAX_ITERATIONS) {
     iteration += 1;
     try {
       console.log(`Invoking ${name} (call ${iteration})...`);
-      const res = await base44.functions.invoke(name, { runStartedAt });
+
+      let payload = {};
+      if (name === "sync-batch" || name === "score-batch") {
+        payload = { runStartedAt };
+      } else if (name === "backtest-strategies") {
+        payload = { full: true };
+      }
+
+      const res = await base44.functions.invoke(name, payload);
       console.log(`${name} ->`, JSON.stringify(res.data));
-      const remaining = res.data?.remaining;
-      if (!remaining || remaining <= 0) break;
+
+      if (name === "backtest-strategies") {
+        break;
+      } else if (name === "sync-batch" || name === "score-batch") {
+        const remaining = res.data?.remaining;
+        if (!remaining || remaining <= 0) break;
+      } else {
+        break;
+      }
+
       await sleep(DELAY_BETWEEN_CALLS_MS);
     } catch (err) {
       hadError = true;
@@ -71,6 +85,7 @@ for (const name of functionNames) {
       break;
     }
   }
+
   if (iteration >= MAX_ITERATIONS) {
     console.error(`${name} still had work left after ${MAX_ITERATIONS} calls — will continue next run.`);
   }

@@ -1,17 +1,14 @@
-name: Sync tracked wallets
+name: Backtest strategies
 
-# Base44 has no built-in cron, so this workflow is the scheduler: every 30
-# minutes it logs into the app as a dedicated bot account (Base44 apps set to
-# "private" require a real session for every request, including function
-# calls) and asks it to pull fresh activity/positions for all tracked wallets,
-# then recompute skill scores.
+# Runs the full strategy grid (~20 variants) against 30 days of synced history.
+# Scheduled weekly; also runnable manually from GitHub Actions.
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 8 * * 0"
   workflow_dispatch:
 
 jobs:
-  sync:
+  backtest:
     runs-on: ubuntu-latest
     env:
       BASE44_APP_ID: "6a71456255306fb44df3f700"
@@ -24,5 +21,5 @@ jobs:
           node-version: "20"
       - run: npm install "@base44/sdk@^0.8.0"
         working-directory: .github/scripts
-      - run: node run-scheduled-task.mjs sync-batch score-batch detect-consensus run-paper-trades
+      - run: node run-scheduled-task.mjs backtest-strategies
         working-directory: .github/scripts
