@@ -220,5 +220,6 @@ declare module '@base44/sdk' {
     "sync-batch": true;
     "score-batch": true;
     "auto-track-leaderboard": true;
+    "detect-consensus": true;
   }
 }

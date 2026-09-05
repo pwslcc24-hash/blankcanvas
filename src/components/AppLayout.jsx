@@ -1,12 +1,13 @@
 import React from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { LayoutDashboard, Compass, LogOut, LineChart } from "lucide-react";
+import { LayoutDashboard, Compass, LogOut, LineChart, Bell } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { to: "/", label: "Wallets", icon: LayoutDashboard, end: true },
+  { to: "/alerts", label: "Alerts", icon: Bell },
   { to: "/discover", label: "Discover", icon: Compass },
 ];
 

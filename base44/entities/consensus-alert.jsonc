@@ -1,0 +1,95 @@
+{
+  "name": "ConsensusAlert",
+  "type": "object",
+  "description": "A detected smart-wallet consensus signal: multiple independently skilled wallets bought the same market outcome within a short window. Stored for the alerts dashboard and future paper-trading engine.",
+  "properties": {
+    "signal_key": {
+      "type": "string",
+      "description": "Deterministic dedupe key: condition_id|outcome_index|time-bucket"
+    },
+    "condition_id": {
+      "type": "string",
+      "description": "Polymarket condition ID for the market"
+    },
+    "market_title": {
+      "type": "string",
+      "description": "Market question/title"
+    },
+    "market_slug": {
+      "type": "string",
+      "description": "Polymarket slug for linking to the market page"
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Outcome label, e.g. Yes/No"
+    },
+    "outcome_index": {
+      "type": "integer",
+      "description": "Outcome index traded"
+    },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this signal was detected or last refreshed"
+    },
+    "first_buy_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Earliest skilled-wallet buy in this consensus window"
+    },
+    "last_buy_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Latest skilled-wallet buy in this consensus window"
+    },
+    "window_hours": {
+      "type": "number",
+      "description": "Consensus time window used (hours)"
+    },
+    "wallet_count": {
+      "type": "integer",
+      "description": "Number of distinct skilled wallets in agreement"
+    },
+    "participants_json": {
+      "type": "string",
+      "description": "JSON array of participating wallets with grade, score, entry price, size, and timestamp"
+    },
+    "vwap_entry_price": {
+      "type": "number",
+      "description": "Volume-weighted average entry price (0-1) across participating buys"
+    },
+    "total_usdc": {
+      "type": "number",
+      "description": "Total USDC deployed by participating skilled wallets"
+    },
+    "current_price": {
+      "type": "number",
+      "description": "Market price (0-1) at detection time, if available"
+    },
+    "price_drift": {
+      "type": "number",
+      "description": "current_price minus vwap_entry_price; positive means price moved against followers"
+    },
+    "quality": {
+      "type": "string",
+      "enum": ["strong", "caution", "blocked"],
+      "description": "strong = passes all filters; caution = consensus but elevated price drift; blocked = fast market or excessive drift"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "expired", "dismissed"],
+      "description": "active signals are shown by default; expired past relevance window; dismissed by user"
+    },
+    "block_reason": {
+      "type": "string",
+      "description": "Why a signal was marked caution/blocked (fast market, price drift, etc.)"
+    }
+  },
+  "required": ["signal_key", "condition_id", "detected_at", "wallet_count", "quality", "status"],
+  "rls": {
+    "create": true,
+    "read": true,
+    "update": true,
+    "delete": true
+  }
+}

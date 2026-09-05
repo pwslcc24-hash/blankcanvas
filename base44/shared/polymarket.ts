@@ -93,6 +93,46 @@ export async function fetchPositions(address: string, limit = 500): Promise<any[
   return unwrapList(data);
 }
 
+const GAMMA_API = "https://gamma-api.polymarket.com";
+
+/** Best-effort current mid price (0-1) for a market outcome via Gamma API. */
+export async function fetchOutcomePrice(
+  conditionId: string,
+  outcomeIndex: number
+): Promise<number | null> {
+  if (!conditionId) return null;
+  try {
+    const params = new URLSearchParams({ condition_ids: conditionId });
+    const markets = await getJson(`${GAMMA_API}/markets?${params.toString()}`);
+    const list = Array.isArray(markets) ? markets : markets?.data || [];
+    const market = list[0];
+    if (!market) return null;
+
+    const tokens = market.tokens || market.clobTokenIds || [];
+    if (Array.isArray(tokens) && tokens.length) {
+      const token = tokens.find(
+        (t: any) =>
+          t.outcomeIndex === outcomeIndex ||
+          t.outcome_index === outcomeIndex ||
+          Number(t.index) === outcomeIndex
+      );
+      if (token?.price != null) return Number(token.price);
+    }
+
+    // Gamma sometimes exposes outcomePrices as parallel arrays
+    const prices = market.outcomePrices;
+    if (prices != null) {
+      const parsed = typeof prices === "string" ? JSON.parse(prices) : prices;
+      if (Array.isArray(parsed) && parsed[outcomeIndex] != null) {
+        return Number(parsed[outcomeIndex]);
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function activityDedupeKey(address: string, a: any): string {
   return [
     address,

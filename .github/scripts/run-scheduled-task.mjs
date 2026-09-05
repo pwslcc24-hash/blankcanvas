@@ -7,8 +7,8 @@
 // then invokes the given functions in order. This is what stands in for
 // Base44's missing built-in cron/scheduler.
 //
-// sync-batch and score-batch process bounded batches per call and
-// report `remaining` in their response, so this script calls them repeatedly
+// sync-batch, score-batch, and detect-consensus run in sequence. The first two
+// process bounded batches per call and report `remaining` in their response,
 // until the whole tracked-wallet list has been covered (capped to avoid an
 // infinite loop if something is stuck). Each function gets a fixed
 // `runStartedAt` timestamp shared across its calls so `remaining` reflects

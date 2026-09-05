@@ -24,5 +24,5 @@ jobs:
           node-version: "20"
       - run: npm install "@base44/sdk@^0.8.0"
         working-directory: .github/scripts
-      - run: node run-scheduled-task.mjs sync-batch score-batch
+      - run: node run-scheduled-task.mjs sync-batch score-batch detect-consensus
         working-directory: .github/scripts

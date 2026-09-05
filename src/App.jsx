@@ -12,6 +12,7 @@ import AppLayout from '@/components/AppLayout';
 import Dashboard from '@/pages/Dashboard';
 import WalletDetail from '@/pages/WalletDetail';
 import Discover from '@/pages/Discover';
+import Alerts from '@/pages/Alerts';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
@@ -55,6 +56,7 @@ const AuthenticatedApp = () => {
           <Route path="/" element={<Dashboard />} />
           <Route path="/wallets/:address" element={<WalletDetail />} />
           <Route path="/discover" element={<Discover />} />
+          <Route path="/alerts" element={<Alerts />} />
         </Route>
       </Route>
 
