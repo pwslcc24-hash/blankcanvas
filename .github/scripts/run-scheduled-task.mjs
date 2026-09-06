@@ -31,7 +31,7 @@ function sleep(ms) {
 
 function isRateLimit(err) {
   const msg = JSON.stringify(err?.response?.data || err?.message || err || "");
-  return /rate limit/i.test(msg);
+  return /rate limit|traffic volume limit/i.test(msg);
 }
 
 if (!appId || !email || !password) {
@@ -65,6 +65,7 @@ async function invokeOnce(name, payload) {
 for (const name of functionNames) {
   const runStartedAt = new Date().toISOString();
   let iteration = 0;
+  let stepFailed = false;
 
   while (iteration < MAX_ITERATIONS) {
     iteration += 1;
@@ -91,33 +92,45 @@ for (const name of functionNames) {
 
       await sleep(DELAY_BETWEEN_CALLS_MS);
     } catch (err) {
-      if (name === "run-paper-trades" && isRateLimit(err)) {
-        console.warn(`${name}: rate limit — retrying once in ${RATE_LIMIT_RETRY_MS / 1000}s...`);
+      if (isRateLimit(err)) {
+        console.warn(`${name}: API limit — retrying once in ${RATE_LIMIT_RETRY_MS / 1000}s...`);
         await sleep(RATE_LIMIT_RETRY_MS);
         try {
-          await invokeOnce(name, {});
+          let payload = {};
+          if (name === "sync-batch" || name === "score-batch") {
+            payload = { runStartedAt };
+          }
+          await invokeOnce(name, payload);
           break;
         } catch (retryErr) {
-          if (isRateLimit(retryErr)) {
-            warnings.push(`${name} skipped after rate limit (sync & alerts still ran)`);
-            console.warn(`${name} still rate limited — continuing without failing the job`);
+          if (isRateLimit(retryErr) && name === "run-paper-trades") {
+            warnings.push(`${name} skipped after API limit (sync & alerts still ran)`);
+            console.warn(`${name} still limited — continuing without failing the job`);
             break;
           }
-          hadError = true;
+          stepFailed = true;
+          hadError = name === "sync-batch" || name === "score-batch";
           console.error(`${name} failed on retry:`, retryErr?.response?.data || retryErr?.message || retryErr);
           break;
         }
+      } else {
+        stepFailed = true;
+        hadError = true;
+        console.error(`${name} failed:`, err?.response?.data || err?.message || err);
+        break;
       }
-
-      hadError = true;
-      console.error(`${name} failed:`, err?.response?.data || err?.message || err);
-      break;
     }
   }
 
   if (iteration >= MAX_ITERATIONS) {
     warnings.push(`${name} still had work after ${MAX_ITERATIONS} calls — will continue next run`);
     console.warn(warnings[warnings.length - 1]);
+  }
+
+  // Don't hammer the API if sync/score didn't finish — wait for next cron
+  if (stepFailed && (name === "sync-batch" || name === "score-batch")) {
+    console.warn(`Stopping early — ${name} failed, skipping remaining steps this run`);
+    break;
   }
 }
 
