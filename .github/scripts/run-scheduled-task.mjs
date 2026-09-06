@@ -21,17 +21,37 @@ const email = process.env.BASE44_BOT_EMAIL;
 const password = process.env.BASE44_BOT_PASSWORD;
 const functionNames = process.argv.slice(2);
 
-const MAX_ITERATIONS = 50;
 const DELAY_BETWEEN_CALLS_MS = 5000;
 const RATE_LIMIT_RETRY_MS = 90000;
+
+// Cap work per cron tick so a */30 schedule finishes in ~5–8 min instead of
+// trying to sync all ~350 wallets in one 17-minute marathon.
+const STEP_LIMITS = {
+  "sync-batch": 6,
+  "score-batch": 3,
+  "backtest-strategies": 50,
+};
+const DEFAULT_STEP_LIMIT = 1;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function errorText(err) {
+  return JSON.stringify(err?.response?.data || err?.data || err?.message || err || "");
+}
+
 function isRateLimit(err) {
-  const msg = JSON.stringify(err?.response?.data || err?.message || err || "");
-  return /rate limit|traffic volume limit/i.test(msg);
+  return /rate limit|traffic volume limit/i.test(errorText(err));
+}
+
+function isOptionalStep(name) {
+  return name === "run-paper-trades";
+}
+
+function handleOptionalLimit(name) {
+  warnings.push(`${name} skipped after API limit (sync & alerts still ran)`);
+  console.warn(`${name} still limited — continuing without failing the job`);
 }
 
 if (!appId || !email || !password) {
@@ -59,15 +79,44 @@ try {
 async function invokeOnce(name, payload) {
   const res = await base44.functions.invoke(name, payload);
   console.log(`${name} ->`, JSON.stringify(res.data));
+  if (res.data?.error) {
+    const err = new Error(res.data.error);
+    err.response = { data: res.data };
+    throw err;
+  }
   return res;
+}
+
+async function invokeWithRetry(name, payload) {
+  try {
+    return await invokeOnce(name, payload);
+  } catch (err) {
+    if (!isRateLimit(err)) {
+      throw err;
+    }
+
+    console.warn(`${name}: API limit — retrying once in ${RATE_LIMIT_RETRY_MS / 1000}s...`);
+    await sleep(RATE_LIMIT_RETRY_MS);
+
+    try {
+      return await invokeOnce(name, payload);
+    } catch (retryErr) {
+      if (isRateLimit(retryErr) && isOptionalStep(name)) {
+        handleOptionalLimit(name);
+        return null;
+      }
+      throw retryErr;
+    }
+  }
 }
 
 for (const name of functionNames) {
   const runStartedAt = new Date().toISOString();
+  const stepLimit = STEP_LIMITS[name] ?? DEFAULT_STEP_LIMIT;
   let iteration = 0;
   let stepFailed = false;
 
-  while (iteration < MAX_ITERATIONS) {
+  while (iteration < stepLimit) {
     iteration += 1;
     try {
       console.log(`Invoking ${name} (call ${iteration})...`);
@@ -79,7 +128,10 @@ for (const name of functionNames) {
         payload = { force: true };
       }
 
-      const res = await invokeOnce(name, payload);
+      const res = await invokeWithRetry(name, payload);
+      if (!res) {
+        break;
+      }
 
       if (name === "backtest-strategies") {
         break;
@@ -92,38 +144,27 @@ for (const name of functionNames) {
 
       await sleep(DELAY_BETWEEN_CALLS_MS);
     } catch (err) {
-      if (isRateLimit(err)) {
-        console.warn(`${name}: API limit — retrying once in ${RATE_LIMIT_RETRY_MS / 1000}s...`);
-        await sleep(RATE_LIMIT_RETRY_MS);
-        try {
-          let payload = {};
-          if (name === "sync-batch" || name === "score-batch") {
-            payload = { runStartedAt };
-          }
-          await invokeOnce(name, payload);
-          break;
-        } catch (retryErr) {
-          if (isRateLimit(retryErr) && name === "run-paper-trades") {
-            warnings.push(`${name} skipped after API limit (sync & alerts still ran)`);
-            console.warn(`${name} still limited — continuing without failing the job`);
-            break;
-          }
-          stepFailed = true;
-          hadError = name === "sync-batch" || name === "score-batch";
-          console.error(`${name} failed on retry:`, retryErr?.response?.data || retryErr?.message || retryErr);
-          break;
-        }
-      } else {
-        stepFailed = true;
-        hadError = true;
-        console.error(`${name} failed:`, err?.response?.data || err?.message || err);
+      if (isRateLimit(err) && isOptionalStep(name)) {
+        handleOptionalLimit(name);
         break;
       }
+
+      if (isRateLimit(err) && (name === "sync-batch" || name === "score-batch") && iteration > 1) {
+        warnings.push(`${name} stopped early after API limit — partial progress saved for next run`);
+        console.warn(warnings[warnings.length - 1]);
+        stepFailed = true;
+        break;
+      }
+
+      stepFailed = true;
+      hadError = name === "sync-batch" || name === "score-batch";
+      console.error(`${name} failed:`, err?.response?.data || err?.message || err);
+      break;
     }
   }
 
-  if (iteration >= MAX_ITERATIONS) {
-    warnings.push(`${name} still had work after ${MAX_ITERATIONS} calls — will continue next run`);
+  if (iteration >= stepLimit) {
+    warnings.push(`${name} hit per-run cap (${stepLimit} calls) — will continue next run`);
     console.warn(warnings[warnings.length - 1]);
   }
 

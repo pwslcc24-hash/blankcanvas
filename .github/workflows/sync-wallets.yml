@@ -1,18 +1,24 @@
 name: Sync tracked wallets
 
-# Base44 has no built-in cron, so this workflow is the scheduler: every 30
-# minutes it logs into the app as a dedicated bot account (Base44 apps set to
-# "private" require a real session for every request, including function
-# calls) and asks it to pull fresh activity/positions for all tracked wallets,
-# then recompute skill scores.
+# Base44 has no built-in cron, so this workflow is the scheduler. It logs in as
+# a dedicated bot account and pulls fresh activity/positions for tracked
+# wallets, recomputes scores, detects consensus, and runs paper trades.
+#
+# Schedule: every 30 minutes. Each run only syncs/scores a slice of wallets
+# (~5–8 min) so runs finish before the next one and stay under API limits.
 on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
+concurrency:
+  group: sync-wallets
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       BASE44_APP_ID: "6a71456255306fb44df3f700"
       BASE44_BOT_EMAIL: ${{ secrets.BASE44_BOT_EMAIL }}
