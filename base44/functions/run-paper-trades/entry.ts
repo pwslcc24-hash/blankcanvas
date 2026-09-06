@@ -4,30 +4,28 @@ import { isSkilledForConsensus } from "../../shared/consensus.ts";
 import { resolveTradeOutcome, simulatePaperTrade } from "../../shared/paper-trading.ts";
 import { withRetry } from "../../shared/retry.ts";
 
-const WALLET_BATCH = 8;
+const MAX_CREATES_PER_RUN = 40;
 
-async function fetchRedeems(base44: any): Promise<any[]> {
-  const wallets = await base44.entities.TrackedWallet.filter({ is_active: true });
-  const skilled = wallets.filter(isSkilledForConsensus);
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchRedeems(base44: any, skilled: any[]): Promise<any[]> {
   const redeems: any[] = [];
-  for (let i = 0; i < skilled.length; i += WALLET_BATCH) {
-    const batch = skilled.slice(i, i + WALLET_BATCH);
-    const chunks = await Promise.all(
-      batch.map(async (wallet: any) => {
-        try {
-          return await withRetry(() =>
-            base44.entities.WalletActivity.filter(
-              { wallet_address: wallet.address, event_type: "REDEEM" },
-              "-occurred_at",
-              40
-            )
-          );
-        } catch {
-          return [];
-        }
-      })
-    );
-    for (const rows of chunks) redeems.push(...rows);
+  for (const wallet of skilled) {
+    try {
+      const rows = await withRetry(() =>
+        base44.entities.WalletActivity.filter(
+          { wallet_address: wallet.address, event_type: "REDEEM" },
+          "-occurred_at",
+          30
+        )
+      );
+      redeems.push(...rows);
+    } catch {
+      /* skip wallet on rate limit */
+    }
+    await sleep(250);
   }
   return redeems;
 }
@@ -43,31 +41,47 @@ export default async function (req: Request): Promise<Response> {
     const now = new Date();
     const since = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
 
+    const wallets = await base44.entities.TrackedWallet.filter({ is_active: true });
+    const skilled = wallets.filter(isSkilledForConsensus);
+
     let redeems: any[] = [];
     try {
-      redeems = await fetchRedeems(base44);
+      redeems = await fetchRedeems(base44, skilled);
     } catch {
       redeems = [];
     }
 
-    const alerts = await base44.entities.ConsensusAlert.filter({ status: "active" });
+    const [alerts, forwardTrades, strategyRows] = await Promise.all([
+      base44.entities.ConsensusAlert.filter({ status: "active" }),
+      base44.entities.PaperTrade.filter({ is_backtest: false }, "-entry_at", 500),
+      base44.entities.PaperStrategy.list(null, 50),
+    ]);
+
     const recentAlerts = alerts.filter((a: any) => a.detected_at >= since);
+    const existingKeys = new Set(forwardTrades.map((t: any) => t.trade_key));
+    const inactive = new Set(
+      strategyRows.filter((s: any) => s.is_active === false).map((s: any) => s.strategy_id)
+    );
+    const openByStrategy = new Map<string, any[]>();
+    for (const t of forwardTrades) {
+      if (t.status !== "open") continue;
+      if (!openByStrategy.has(t.strategy_id)) openByStrategy.set(t.strategy_id, []);
+      openByStrategy.get(t.strategy_id)!.push(t);
+    }
 
     let entered = 0;
     let resolved = 0;
+    let skippedRateLimit = false;
 
     for (const preset of STRATEGY_PRESETS) {
-      const strategyRows = await base44.entities.PaperStrategy.filter({
-        strategy_id: preset.strategy_id,
-      });
-      if (strategyRows.length && strategyRows[0].is_active === false) continue;
+      if (inactive.has(preset.strategy_id)) continue;
 
       for (const alert of recentAlerts) {
+        if (entered >= MAX_CREATES_PER_RUN) break;
         if (!alertMatchesStrategy(alert, preset.params)) continue;
 
         const tradeKey = `${preset.strategy_id}|${alert.signal_key}`;
-        const existing = await base44.entities.PaperTrade.filter({ trade_key: tradeKey });
-        if (existing.length) continue;
+        if (existingKeys.has(tradeKey)) continue;
 
         const cluster = {
           signal_key: alert.signal_key,
@@ -94,20 +108,30 @@ export default async function (req: Request): Promise<Response> {
         );
 
         const trade = simulatePaperTrade(cluster, preset.strategy_id, preset.params, resolution);
-        await base44.entities.PaperTrade.create({
-          ...trade,
-          strategy_id: preset.strategy_id,
-          is_backtest: false,
-        });
-        entered += 1;
+        try {
+          await base44.entities.PaperTrade.create({
+            ...trade,
+            strategy_id: preset.strategy_id,
+            is_backtest: false,
+            pnl_usd: trade.pnl_usd ?? null,
+            exit_at: trade.exit_at ?? null,
+            exit_price: trade.exit_price ?? null,
+          });
+          existingKeys.add(tradeKey);
+          entered += 1;
+          await sleep(80);
+        } catch (err: any) {
+          if (/rate limit/i.test(String(err?.message || err))) {
+            skippedRateLimit = true;
+            break;
+          }
+          throw err;
+        }
       }
 
-      // Resolve open forward trades for this strategy
-      const openTrades = await base44.entities.PaperTrade.filter({
-        strategy_id: preset.strategy_id,
-        status: "open",
-        is_backtest: false,
-      });
+      if (skippedRateLimit) break;
+
+      const openTrades = openByStrategy.get(preset.strategy_id) || [];
       for (const t of openTrades) {
         const entryMs = new Date(t.entry_at).getTime();
         const resolution = resolveTradeOutcome(
@@ -122,22 +146,47 @@ export default async function (req: Request): Promise<Response> {
         const proceeds = (t.shares || 0) * exitPrice;
         const pnl = Math.round((proceeds - (t.stake_usd || 0)) * 100) / 100;
 
-        await base44.entities.PaperTrade.update(t.id, {
-          status: resolution.status,
-          exit_at: resolution.exit_at,
-          exit_price: exitPrice,
-          pnl_usd: pnl,
-        });
-        resolved += 1;
+        try {
+          await base44.entities.PaperTrade.update(t.id, {
+            status: resolution.status,
+            exit_at: resolution.exit_at,
+            exit_price: exitPrice,
+            pnl_usd: pnl,
+          });
+          resolved += 1;
+          await sleep(80);
+        } catch (err: any) {
+          if (/rate limit/i.test(String(err?.message || err))) {
+            skippedRateLimit = true;
+            break;
+          }
+          throw err;
+        }
       }
+
+      if (skippedRateLimit) break;
     }
 
     return Response.json({
       alertsChecked: recentAlerts.length,
       entered,
       resolved,
+      partial: skippedRateLimit,
+      message: skippedRateLimit
+        ? "Partial run — hit rate limit, will continue next cron"
+        : undefined,
     });
   } catch (err: any) {
-    return Response.json({ error: String(err?.message || err) }, { status: 500 });
+    const message = String(err?.message || err);
+    const rateLimited = /rate limit/i.test(message);
+    return Response.json(
+      {
+        error: rateLimited
+          ? "Rate limit exceeded — partial progress saved, retry next run"
+          : message,
+        rateLimited,
+      },
+      { status: rateLimited ? 429 : 500 }
+    );
   }
 }

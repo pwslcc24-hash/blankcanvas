@@ -8,7 +8,7 @@
 // Base44's missing built-in cron/scheduler.
 //
 // sync-batch / score-batch: pass shared runStartedAt, loop while remaining > 0
-// backtest-strategies: paginate with offset until remaining presets = 0
+// backtest-strategies: full rebuild (weekly cron only)
 // detect-consensus / run-paper-trades: single shot per run
 //
 // Required env vars: BASE44_APP_ID, BASE44_BOT_EMAIL, BASE44_BOT_PASSWORD
@@ -21,11 +21,17 @@ const email = process.env.BASE44_BOT_EMAIL;
 const password = process.env.BASE44_BOT_PASSWORD;
 const functionNames = process.argv.slice(2);
 
-const MAX_ITERATIONS = 40;
+const MAX_ITERATIONS = 50;
 const DELAY_BETWEEN_CALLS_MS = 5000;
+const RATE_LIMIT_RETRY_MS = 90000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimit(err) {
+  const msg = JSON.stringify(err?.response?.data || err?.message || err || "");
+  return /rate limit/i.test(msg);
 }
 
 if (!appId || !email || !password) {
@@ -40,6 +46,7 @@ if (!functionNames.length) {
 const base44 = createClient({ appId });
 
 let hadError = false;
+const warnings = [];
 
 try {
   await base44.auth.loginViaEmailPassword(email, password);
@@ -49,10 +56,15 @@ try {
   process.exit(1);
 }
 
+async function invokeOnce(name, payload) {
+  const res = await base44.functions.invoke(name, payload);
+  console.log(`${name} ->`, JSON.stringify(res.data));
+  return res;
+}
+
 for (const name of functionNames) {
   const runStartedAt = new Date().toISOString();
   let iteration = 0;
-  let offset = 0;
 
   while (iteration < MAX_ITERATIONS) {
     iteration += 1;
@@ -66,8 +78,7 @@ for (const name of functionNames) {
         payload = { force: true };
       }
 
-      const res = await base44.functions.invoke(name, payload);
-      console.log(`${name} ->`, JSON.stringify(res.data));
+      const res = await invokeOnce(name, payload);
 
       if (name === "backtest-strategies") {
         break;
@@ -80,6 +91,24 @@ for (const name of functionNames) {
 
       await sleep(DELAY_BETWEEN_CALLS_MS);
     } catch (err) {
+      if (name === "run-paper-trades" && isRateLimit(err)) {
+        console.warn(`${name}: rate limit — retrying once in ${RATE_LIMIT_RETRY_MS / 1000}s...`);
+        await sleep(RATE_LIMIT_RETRY_MS);
+        try {
+          await invokeOnce(name, {});
+          break;
+        } catch (retryErr) {
+          if (isRateLimit(retryErr)) {
+            warnings.push(`${name} skipped after rate limit (sync & alerts still ran)`);
+            console.warn(`${name} still rate limited — continuing without failing the job`);
+            break;
+          }
+          hadError = true;
+          console.error(`${name} failed on retry:`, retryErr?.response?.data || retryErr?.message || retryErr);
+          break;
+        }
+      }
+
       hadError = true;
       console.error(`${name} failed:`, err?.response?.data || err?.message || err);
       break;
@@ -87,9 +116,15 @@ for (const name of functionNames) {
   }
 
   if (iteration >= MAX_ITERATIONS) {
-    console.error(`${name} still had work left after ${MAX_ITERATIONS} calls — will continue next run.`);
+    warnings.push(`${name} still had work after ${MAX_ITERATIONS} calls — will continue next run`);
+    console.warn(warnings[warnings.length - 1]);
   }
 }
 
 base44.cleanup();
+
+if (warnings.length) {
+  console.log("Warnings:", warnings.join("; "));
+}
+
 process.exit(hadError ? 1 : 0);
