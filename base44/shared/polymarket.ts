@@ -95,6 +95,132 @@ export async function fetchPositions(address: string, limit = 500): Promise<any[
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
 
+const SPORTS_LEAGUES = new Set([
+  "epl",
+  "mex",
+  "nfl",
+  "nba",
+  "mlb",
+  "nhl",
+  "ucl",
+  "mls",
+  "lal",
+  "bun",
+  "sea",
+  "fl1",
+  "ere",
+  "por",
+  "tur",
+  "spl",
+  "dfb",
+  "cof",
+  "uef",
+  "wta",
+  "atp",
+  "cs2",
+  "lol",
+  "val",
+]);
+
+const SPORTS_EVENT_SLUG =
+  /^((?:epl|mex|nfl|nba|mlb|nhl|ucl|mls|lal|bun|sea|fl1|ere|por|tur|spl|dfb|cof|uef|wta|atp|cs2|lol|val)-.+-\d{4}-\d{2}-\d{2})/;
+
+/** Build a browser URL from a Polymarket event or market slug. */
+export function buildPolymarketUrlFromSlug(slug?: string | null): string | null {
+  if (!slug) return null;
+  const clean = slug.trim();
+  if (!clean) return null;
+
+  const prefix = clean.split("-")[0]?.toLowerCase();
+  if (prefix && SPORTS_LEAGUES.has(prefix)) {
+    const eventMatch = clean.match(SPORTS_EVENT_SLUG);
+    const eventSlug = eventMatch ? eventMatch[1] : clean;
+    return `https://polymarket.com/sports/${prefix}/${eventSlug}`;
+  }
+
+  return `https://polymarket.com/event/${clean}`;
+}
+
+/** Resolve slug + URL via Gamma search (title and/or condition id). */
+export async function resolvePolymarketLink(opts: {
+  marketTitle?: string;
+  conditionId?: string;
+  marketSlug?: string;
+}): Promise<{ url: string | null; slug: string | null; eventSlug: string | null }> {
+  const fromSlug = buildPolymarketUrlFromSlug(opts.marketSlug);
+  if (fromSlug) {
+    return { url: fromSlug, slug: opts.marketSlug || null, eventSlug: opts.marketSlug || null };
+  }
+
+  const query = opts.marketTitle || opts.conditionId;
+  if (!query) return { url: null, slug: null, eventSlug: null };
+
+  try {
+    const params = new URLSearchParams({ q: query });
+    const data = await getJson(`${GAMMA_API}/public-search?${params.toString()}`);
+    const events = data?.events || [];
+
+    for (const event of events) {
+      const markets = event?.markets || [];
+      for (const market of markets) {
+        const cid = (market.conditionId || market.condition_id || "").toLowerCase();
+        if (opts.conditionId && cid === opts.conditionId.toLowerCase()) {
+          const url = buildPolymarketUrlFromGamma(event, market);
+          return {
+            url,
+            slug: market.slug || event.slug || null,
+            eventSlug: event.slug || null,
+          };
+        }
+      }
+    }
+
+    if (opts.marketTitle) {
+      const titleLower = opts.marketTitle.toLowerCase();
+      for (const event of events) {
+        const markets = event?.markets || [];
+        const market = markets.find(
+          (m: any) =>
+            (m.question || "").toLowerCase() === titleLower ||
+            (m.question || "").toLowerCase().includes(titleLower) ||
+            titleLower.includes((m.question || "").toLowerCase())
+        );
+        if (market) {
+          const url = buildPolymarketUrlFromGamma(event, market);
+          return {
+            url,
+            slug: market.slug || event.slug || null,
+            eventSlug: event.slug || null,
+          };
+        }
+        if ((event.title || "").toLowerCase().includes(titleLower.split("?")[0].trim())) {
+          const url = buildPolymarketUrlFromGamma(event);
+          return { url, slug: event.slug || null, eventSlug: event.slug || null };
+        }
+      }
+    }
+
+    if (events[0]) {
+      const url = buildPolymarketUrlFromGamma(events[0]);
+      return {
+        url,
+        slug: events[0].slug || null,
+        eventSlug: events[0].slug || null,
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+
+  return { url: null, slug: null, eventSlug: null };
+}
+
+function buildPolymarketUrlFromGamma(event: any, market?: any): string | null {
+  if (event?.slug) return buildPolymarketUrlFromSlug(event.slug);
+  if (market?.slug) return buildPolymarketUrlFromSlug(market.slug);
+  return null;
+}
+
 /** Best-effort current mid price (0-1) for a market outcome via Gamma API. */
 export async function fetchOutcomePrice(
   conditionId: string,

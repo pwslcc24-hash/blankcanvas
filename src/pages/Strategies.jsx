@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp, Users, ExternalLink } from "lucide-react";
+import { tradePolymarketUrlSync } from "@/lib/polymarketLinks";
 import {
   Dialog,
   DialogContent,
@@ -438,19 +439,6 @@ function shortAddress(addr) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-function polymarketUrl(slug, conditionId) {
-  if (slug) return `https://polymarket.com/event/${slug}`;
-  if (conditionId) return `https://polymarket.com/market/${conditionId}`;
-  return null;
-}
-
-function tradePolymarketUrl(trade, alerts) {
-  if (trade.market_slug) return polymarketUrl(trade.market_slug, trade.condition_id);
-  const alert = findAlertForTrade(trade, alerts);
-  if (alert) return polymarketUrl(alert.market_slug, alert.condition_id);
-  return polymarketUrl(null, trade.condition_id);
-}
-
 function findAlertForTrade(trade, alerts) {
   const exact = alerts.find((a) => a.signal_key === trade.signal_key);
   if (exact) return exact;
@@ -564,7 +552,7 @@ function ParticipantsList({ participants }) {
   );
 }
 
-function TradeTable({ trades, alerts, onViewWallets, loadingTradeKey }) {
+function TradeTable({ trades, alerts, polymarketUrls, onViewWallets, loadingTradeKey }) {
   if (!trades.length) {
     return <p className="text-sm text-muted-foreground px-6 py-8 text-center">No trades in this view.</p>;
   }
@@ -637,9 +625,15 @@ function TradeTable({ trades, alerts, onViewWallets, loadingTradeKey }) {
                 </TableCell>
                 <TableCell className="text-sm" onClick={(e) => e.stopPropagation()}>
                   {(() => {
-                    const url = tradePolymarketUrl(t, alerts);
+                    const url = tradePolymarketUrlSync(t, alerts, polymarketUrls);
                     const label = t.outcome || "—";
-                    if (!url || label === "—") return label;
+                    if (!url || label === "—") {
+                      return (
+                        <span className="text-muted-foreground" title="Link loading or unavailable">
+                          {label}
+                        </span>
+                      );
+                    }
                     return (
                       <a
                         href={url}
@@ -734,8 +728,52 @@ export default function Strategies() {
   const [walletDialogParticipants, setWalletDialogParticipants] = useState([]);
   const [walletDialogLoading, setWalletDialogLoading] = useState(false);
   const [loadingTradeKey, setLoadingTradeKey] = useState(null);
+  const [polymarketUrls, setPolymarketUrls] = useState({});
+  const resolvingLinksRef = useRef(new Set());
 
   const [globalPastStart, setGlobalPastStart] = useState(null);
+
+  useEffect(() => {
+    setPolymarketUrls({});
+    resolvingLinksRef.current = new Set();
+  }, [selectedId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolveLinks = async () => {
+      for (const t of trades.slice(0, 100)) {
+        const key = t.id || t.trade_key;
+        if (!key || cancelled) continue;
+
+        const syncUrl = tradePolymarketUrlSync(t, alerts, {});
+        if (syncUrl) {
+          setPolymarketUrls((prev) => (prev[key] ? prev : { ...prev, [key]: syncUrl }));
+          continue;
+        }
+
+        if (resolvingLinksRef.current.has(key)) continue;
+        resolvingLinksRef.current.add(key);
+
+        try {
+          const alert = findAlertForTrade(t, alerts);
+          const res = await base44.functions.invoke("resolve-polymarket-url", {
+            condition_id: t.condition_id,
+            market_title: t.market_title,
+            market_slug: t.market_slug || alert?.market_slug,
+          });
+          if (!cancelled && res.data?.url) {
+            setPolymarketUrls((prev) => ({ ...prev, [key]: res.data.url }));
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
+    };
+    if (trades.length) resolveLinks();
+    return () => {
+      cancelled = true;
+    };
+  }, [trades, alerts]);
 
   const load = useCallback(async () => {
     try {
@@ -1199,6 +1237,7 @@ export default function Strategies() {
                 <TradeTable
                   trades={filteredTrades.slice(0, 100)}
                   alerts={alerts}
+                  polymarketUrls={polymarketUrls}
                   onViewWallets={openWalletDialog}
                   loadingTradeKey={loadingTradeKey}
                 />

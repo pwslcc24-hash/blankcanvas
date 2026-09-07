@@ -23,6 +23,10 @@
       "type": "string",
       "description": "Market title at entry"
     },
+    "market_slug": {
+      "type": "string",
+      "description": "Polymarket event/market slug for linking"
+    },
     "outcome": {
       "type": "string",
       "description": "Outcome label bought"

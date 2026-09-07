@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { polymarketUrlFromSlug } from "@/lib/polymarketLinks";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
@@ -293,7 +294,7 @@ export default function WalletDetail() {
                         <TableCell className="max-w-xs truncate">
                           {row.market_slug ? (
                             <a
-                              href={`https://polymarket.com/event/${row.market_slug}`}
+                              href={polymarketUrlFromSlug(row.market_slug) || "#"}
                               target="_blank"
                               rel="noreferrer"
                               className="hover:underline"
@@ -342,7 +343,7 @@ export default function WalletDetail() {
                         <TableCell className="max-w-xs truncate">
                           {p.market_slug ? (
                             <a
-                              href={`https://polymarket.com/event/${p.market_slug}`}
+                              href={polymarketUrlFromSlug(p.market_slug) || "#"}
                               target="_blank"
                               rel="noreferrer"
                               className="hover:underline"

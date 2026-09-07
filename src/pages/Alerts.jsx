@@ -56,11 +56,7 @@ const QUALITY_ICONS = {
   blocked: ShieldX,
 };
 
-function polymarketUrl(slug, conditionId) {
-  if (slug) return `https://polymarket.com/event/${slug}`;
-  if (conditionId) return `https://polymarket.com/market/${conditionId}`;
-  return "https://polymarket.com";
-}
+import { polymarketUrlFromSlug } from "@/lib/polymarketLinks";
 
 export default function Alerts() {
   const [alerts, setAlerts] = useState([]);
@@ -238,7 +234,7 @@ export default function Alerts() {
                           {alert.market_title || alert.condition_id?.slice(0, 12)}
                         </p>
                         <a
-                          href={polymarketUrl(alert.market_slug, alert.condition_id)}
+                          href={polymarketUrlFromSlug(alert.market_slug) || "https://polymarket.com"}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
