@@ -27,6 +27,7 @@ export interface SimulatedTrade {
   outcome?: string;
   outcome_index?: number;
   wallet_count: number;
+  participants_json?: string;
   status: "open" | "won" | "lost";
   signal_at: string;
   entry_at: string;
@@ -181,6 +182,52 @@ export function findHistoricalClusters(
   return Array.from(bestBySignal.values()).sort((a, b) => a.detected_at_ms - b.detected_at_ms);
 }
 
+/** Wallets + buys that formed a consensus signal at a point in time (for trade drill-down). */
+export function buildParticipantsForSignal(
+  buys: any[],
+  walletsByAddress: Map<string, any>,
+  params: StrategyParams,
+  conditionId: string,
+  outcomeIndex: number,
+  signalAt: string
+): ConsensusParticipant[] {
+  const signalMs = new Date(signalAt).getTime();
+  const windowMs = params.windowHours * 3600 * 1000;
+  const sinceMs = signalMs - windowMs;
+  const byWallet = new Map<string, any[]>();
+
+  for (const buy of buys) {
+    if (buy.event_type !== "TRADE" || buy.side !== "BUY") continue;
+    if (buy.condition_id !== conditionId || buy.outcome_index !== outcomeIndex) continue;
+    const wallet = walletsByAddress.get(buy.wallet_address);
+    if (!wallet || !walletMatchesStrategy(wallet, params)) continue;
+    const t = buy.occurred_at ? new Date(buy.occurred_at).getTime() : NaN;
+    if (!Number.isFinite(t) || t < sinceMs || t > signalMs) continue;
+    if (!byWallet.has(buy.wallet_address)) byWallet.set(buy.wallet_address, []);
+    byWallet.get(buy.wallet_address)!.push({ buy, wallet, t });
+  }
+
+  const participants: ConsensusParticipant[] = [];
+  for (const [address, walletRows] of byWallet) {
+    const best = walletRows.reduce((a, b) =>
+      (Number(b.buy.usdc_size) || 0) > (Number(a.buy.usdc_size) || 0) ? b : a
+    );
+    participants.push({
+      address,
+      label: best.wallet.label,
+      grade: best.wallet.skill_grade,
+      score: best.wallet.skill_score,
+      confidence: best.wallet.score_confidence,
+      price: Number(best.buy.price) || 0,
+      usdc_size: Number(best.buy.usdc_size) || 0,
+      occurred_at: best.buy.occurred_at,
+    });
+  }
+
+  participants.sort((a, b) => (b.score || 0) - (a.score || 0));
+  return participants;
+}
+
 /** Resolve binary market outcome from synced REDEEM activity or Gamma closed prices. */
 export function resolveTradeOutcome(
   conditionId: string,
@@ -255,6 +302,7 @@ export function simulatePaperTrade(
     outcome: cluster.outcome,
     outcome_index: cluster.outcome_index,
     wallet_count: cluster.wallet_count,
+    participants_json: JSON.stringify(cluster.participants || []),
     status: resolution.status,
     signal_at: cluster.last_buy_at,
     entry_at: new Date(entryMs).toISOString(),

@@ -83,6 +83,13 @@ export default async function (req: Request): Promise<Response> {
         const tradeKey = `${preset.strategy_id}|${alert.signal_key}`;
         if (existingKeys.has(tradeKey)) continue;
 
+        let participants: any[] = [];
+        try {
+          participants = JSON.parse(alert.participants_json || "[]");
+        } catch {
+          participants = [];
+        }
+
         const cluster = {
           signal_key: alert.signal_key,
           condition_id: alert.condition_id,
@@ -93,7 +100,7 @@ export default async function (req: Request): Promise<Response> {
           first_buy_at: alert.first_buy_at || alert.detected_at,
           last_buy_at: alert.last_buy_at || alert.detected_at,
           wallet_count: alert.wallet_count,
-          participants: [],
+          participants,
           vwap_entry_price: alert.vwap_entry_price,
           total_usdc: alert.total_usdc,
         };

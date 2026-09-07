@@ -35,6 +35,10 @@
       "type": "integer",
       "description": "Skilled wallets in consensus at signal time"
     },
+    "participants_json": {
+      "type": "string",
+      "description": "JSON array of wallets that triggered the signal (address, label, grade, price, usdc_size, occurred_at)"
+    },
     "status": {
       "type": "string",
       "enum": ["open", "won", "lost", "expired"],
