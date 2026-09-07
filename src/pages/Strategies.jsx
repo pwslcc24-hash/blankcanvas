@@ -69,6 +69,56 @@ function formatWhen(iso) {
   });
 }
 
+function formatDay(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function earliestLiveDay(trades) {
+  if (!trades?.length) return null;
+  let min = Infinity;
+  for (const t of trades) {
+    const ms = new Date(t.entry_at || t.signal_at).getTime();
+    if (Number.isFinite(ms) && ms < min) min = ms;
+  }
+  return min === Infinity ? null : new Date(min).toISOString();
+}
+
+function tradeDateRange(trades) {
+  if (!trades?.length) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const t of trades) {
+    const ms = new Date(t.entry_at || t.signal_at).getTime();
+    if (!Number.isFinite(ms)) continue;
+    if (ms < min) min = ms;
+    if (ms > max) max = ms;
+  }
+  if (!Number.isFinite(min)) return null;
+  return { start: new Date(min), end: new Date(max) };
+}
+
+function combineDateRange(a, b) {
+  if (!a && !b) return null;
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    start: new Date(Math.min(a.start.getTime(), b.start.getTime())),
+    end: new Date(Math.max(a.end.getTime(), b.end.getTime())),
+  };
+}
+
+function formatRange(range) {
+  if (!range) return null;
+  const a = formatDay(range.start.toISOString());
+  const b = formatDay(range.end.toISOString());
+  return a === b ? a : `${a} – ${b}`;
+}
+
 function parseParams(strategy) {
   try {
     return JSON.parse(strategy?.params_json || "{}");
@@ -232,7 +282,7 @@ function allStatsForStrategy(strategy, liveStatsByStrategy) {
   return combineStats(past, live);
 }
 
-function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakePerTrade }) {
+function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakePerTrade, pastRange, liveRange, allRange }) {
   return (
     <Card className="border-2 border-primary/20">
       <CardHeader className="pb-3">
@@ -252,6 +302,9 @@ function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakeP
                 {usd(allStats.pnl)} net · {pct(allStats.winRate)} win rate
               </p>
             )}
+            {allRange && (
+              <p className="text-[10px] text-muted-foreground mt-1">Trades from {formatRange(allRange)}</p>
+            )}
             <p className="text-[10px] text-muted-foreground mt-1">Use this to pick a strategy</p>
           </div>
           <div className="rounded-lg border border-blue-500/30 bg-blue-500/[0.04] p-3">
@@ -262,6 +315,9 @@ function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakeP
             <p className="text-xs text-muted-foreground mt-1">
               {pastStats.resolved} finished · {pastStats.open} open
             </p>
+            {pastRange && (
+              <p className="text-[10px] text-muted-foreground">Replay data: {formatRange(pastRange)}</p>
+            )}
             {pastStats.resolved > 0 && (
               <p className="text-xs text-muted-foreground">{usd(pastStats.pnl)} net · ${stakePerTrade}/trade</p>
             )}
@@ -274,8 +330,11 @@ function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakeP
             <p className="text-xs text-muted-foreground mt-1">
               {liveStats.resolved} finished · {liveStats.open} open
             </p>
+            {liveRange && (
+              <p className="text-[10px] text-muted-foreground">Forward test: {formatRange(liveRange)}</p>
+            )}
             {liveStats.resolved > 0 && (
-              <p className="text-xs text-muted-foreground">{usd(liveStats.pnl)} net · forward test</p>
+              <p className="text-xs text-muted-foreground">{usd(liveStats.pnl)} net</p>
             )}
           </div>
           <div className="rounded-lg border border-primary/20 p-3 bg-background">
@@ -312,7 +371,7 @@ function MetricTile({ label, value, sub, tone }) {
   );
 }
 
-function StatsDashboard({ title, hint, variant, stats, stakePerTrade }) {
+function StatsDashboard({ title, hint, variant, stats, stakePerTrade, dateRange }) {
   const profitable = (stats.pnl || 0) >= 0;
   const hasData = stats.resolved > 0 || stats.open > 0;
 
@@ -326,10 +385,13 @@ function StatsDashboard({ title, hint, variant, stats, stakePerTrade }) {
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base">{title}</CardTitle>
           <Badge variant="outline" className="text-xs shrink-0">
-            {variant === "live" ? "Forward test" : "30-day replay"}
+            {variant === "live" ? "Forward test" : "History replay"}
           </Badge>
         </div>
-        <CardDescription>{hint}</CardDescription>
+        <CardDescription>
+          {hint}
+          {dateRange && <> · {formatRange(dateRange)}</>}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {!hasData ? (
@@ -642,16 +704,20 @@ export default function Strategies() {
   const [walletDialogLoading, setWalletDialogLoading] = useState(false);
   const [loadingTradeKey, setLoadingTradeKey] = useState(null);
 
+  const [globalPastStart, setGlobalPastStart] = useState(null);
+
   const load = useCallback(async () => {
     try {
-      const [s, a, live] = await Promise.all([
+      const [s, a, live, pastEarliest] = await Promise.all([
         base44.entities.PaperStrategy.list("-roi", 50),
         base44.entities.ConsensusAlert.list("-detected_at", 300),
         base44.entities.PaperTrade.filter({ is_backtest: false }, "-entry_at", 800),
+        base44.entities.PaperTrade.filter({ is_backtest: true }, "entry_at", 1),
       ]);
       setStrategies(s);
       setAlerts(a);
       setLiveTradesAll(live);
+      setGlobalPastStart(pastEarliest[0]?.entry_at || null);
       if (!selectedId && s.length) {
         const withTrades = s.filter((x) => (x.total_trades || 0) > 0);
         setSelectedId((withTrades[0] || s[0]).strategy_id);
@@ -811,6 +877,17 @@ export default function Strategies() {
     return list;
   }, [selectedTrades, tradeFilter]);
 
+  const globalDataRange = useMemo(() => {
+    const liveR = tradeDateRange(liveTradesAll);
+    const pastR = globalPastStart
+      ? { start: new Date(globalPastStart), end: liveR?.end || new Date() }
+      : null;
+    return combineDateRange(pastR, liveR);
+  }, [liveTradesAll, globalPastStart]);
+  const pastRange = useMemo(() => tradeDateRange(backtestTrades), [backtestTrades]);
+  const liveRange = useMemo(() => tradeDateRange(liveTrades), [liveTrades]);
+  const allRange = useMemo(() => combineDateRange(pastRange, liveRange), [pastRange, liveRange]);
+
   const liveStatsByStrategy = useMemo(() => {
     const map = new Map();
     for (const t of liveTradesAll) {
@@ -862,7 +939,11 @@ export default function Strategies() {
             Strategy lab
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Fake money only · Big % = all-time (past + live) — that&apos;s what ranks strategies
+            Fake money only · Big % = all-time (past + live)
+            {globalDataRange && <> · Trades from {formatRange(globalDataRange)}</>}
+          </p>
+          <p className="text-muted-foreground text-xs mt-1">
+            Live paper only started ~2 days ago; past replay is limited to synced wallet history (grows toward 30 days)
           </p>
         </div>
         <Button onClick={runBacktest} disabled={backtesting}>
@@ -894,7 +975,10 @@ export default function Strategies() {
         <Card className="lg:col-span-3 xl:col-span-3">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Strategies</CardTitle>
-            <CardDescription className="text-xs">Ranked by all-time % (past + live)</CardDescription>
+            <CardDescription className="text-xs">
+              Ranked by all-time % (past + live)
+              {globalDataRange && <> · {formatRange(globalDataRange)}</>}
+            </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             {loading ? (
@@ -1027,22 +1111,27 @@ export default function Strategies() {
               allStats={allStats}
               confidence={confidence}
               stakePerTrade={stakePerTrade}
+              pastRange={pastRange}
+              liveRange={liveRange}
+              allRange={allRange}
             />
 
             <div className="grid gap-4 xl:grid-cols-2">
               <StatsDashboard
                 title="Past test"
-                hint={`All ${backtestStats.resolved} saved backtest trades (matches sidebar ${pct(selected?.roi)})`}
+                hint={`${backtestStats.resolved} replayed trades from synced wallet history`}
                 variant="past"
                 stats={backtestStats}
                 stakePerTrade={stakePerTrade}
+                dateRange={pastRange}
               />
               <StatsDashboard
                 title="Live paper"
-                hint={`${liveStats.resolved} forward trades since deploy`}
+                hint={`${liveStats.resolved} forward trades since live paper began`}
                 variant="live"
                 stats={liveStats}
                 stakePerTrade={stakePerTrade}
+                dateRange={liveRange}
               />
             </div>
 
