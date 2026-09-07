@@ -3,6 +3,7 @@
 // read-only, publicly documented endpoints.
 
 export const DATA_API = "https://data-api.polymarket.com";
+export const CLOB_API = "https://clob.polymarket.com";
 
 export function normalizeAddress(address: string): string {
   return (address || "").trim().toLowerCase();
@@ -274,6 +275,124 @@ export async function fetchOutcomePrice(
   return null;
 }
 
+/** Positions with zero value are stale/resolved — exclude from open exposure totals. */
+export function isActiveOpenPosition(p: any): boolean {
+  const value = Number(p.currentValue ?? p.current_value_usd ?? 0);
+  if (value <= 0.01) return false;
+  if (p.redeemable) return false;
+  return true;
+}
+
+export function aggregateOpenPositions(positions: any[]) {
+  const active = positions.filter(isActiveOpenPosition);
+  return {
+    count: active.length,
+    valueUsd: active.reduce((s, p) => s + Number(p.currentValue ?? p.current_value_usd ?? 0), 0),
+    unrealizedPnlUsd: active.reduce((s, p) => s + Number(p.cashPnl ?? p.cash_pnl_usd ?? 0), 0),
+  };
+}
+
+function parseClobTokenIds(market: any): string[] {
+  const raw = market?.clobTokenIds;
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Resolve CLOB outcome token id for price-history lookups. */
+export async function fetchClobTokenId(
+  conditionId: string,
+  outcomeIndex: number,
+  marketSlug?: string | null,
+  marketTitle?: string | null
+): Promise<string | null> {
+  try {
+    if (marketSlug) {
+      const bySlug = await fetchMarketBySlug(marketSlug);
+      const tokens = parseClobTokenIds(bySlug);
+      if (tokens[outcomeIndex]) return tokens[outcomeIndex];
+    }
+    const resolved = await resolvePolymarketLink({
+      conditionId,
+      marketTitle: marketTitle || undefined,
+      marketSlug: marketSlug || undefined,
+    });
+    if (resolved.slug) {
+      const bySlug = await fetchMarketBySlug(resolved.slug);
+      const tokens = parseClobTokenIds(bySlug);
+      if (tokens[outcomeIndex]) return tokens[outcomeIndex];
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+/** Historical mid price nearest to a unix-ms timestamp (CLOB prices-history). */
+export async function fetchPriceAtTime(tokenId: string, targetMs: number): Promise<number | null> {
+  if (!tokenId) return null;
+  try {
+    const targetSec = Math.floor(targetMs / 1000);
+    const params = new URLSearchParams({
+      market: tokenId,
+      startTs: String(Math.max(0, targetSec - 7200)),
+      endTs: String(targetSec + 7200),
+      fidelity: "1",
+    });
+    const data = await getJson(`${CLOB_API}/prices-history?${params.toString()}`);
+    const history: Array<{ t: number; p: number }> = data?.history || [];
+    if (!history.length) return null;
+
+    let best = history[0];
+    let bestDiff = Math.abs(best.t - targetSec);
+    for (const pt of history) {
+      const diff = Math.abs(pt.t - targetSec);
+      if (diff < bestDiff) {
+        best = pt;
+        bestDiff = diff;
+      }
+    }
+    return best?.p != null ? Number(best.p) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Entry price at signal + delay: CLOB history when available, else skilled VWAP fallback. */
+export async function resolveDelayedEntryPrice(
+  cluster: {
+    last_buy_at: string;
+    vwap_entry_price: number;
+    condition_id: string;
+    outcome_index?: number;
+    market_slug?: string;
+    market_title?: string;
+  },
+  delaySec: number,
+  slippage: number
+): Promise<number> {
+  const signalMs = new Date(cluster.last_buy_at).getTime();
+  const entryMs = signalMs + delaySec * 1000;
+  const outcomeIndex = cluster.outcome_index ?? 0;
+
+  const tokenId = await fetchClobTokenId(
+    cluster.condition_id,
+    outcomeIndex,
+    cluster.market_slug,
+    cluster.market_title
+  );
+  let price = tokenId ? await fetchPriceAtTime(tokenId, entryMs) : null;
+  if (price == null || !Number.isFinite(price)) {
+    price = cluster.vwap_entry_price;
+  }
+
+  return Math.min(0.99, Math.max(0.01, price + slippage));
+}
+
 function activityDedupeKey(address: string, a: any): string {
   return [
     address,
@@ -363,8 +482,7 @@ export async function syncWalletRecord(base44: any, wallet: any): Promise<any> {
   const firstAt = timestamps.length ? toIso(Math.min(...timestamps)) : wallet.first_synced_activity_at;
   const lastAt = timestamps.length ? toIso(Math.max(...timestamps)) : wallet.last_synced_activity_at;
 
-  const openValue = positions.reduce((sum: number, p: any) => sum + (p.currentValue || 0), 0);
-  const openPnl = positions.reduce((sum: number, p: any) => sum + (p.cashPnl || 0), 0);
+  const openAgg = aggregateOpenPositions(positions);
 
   const updates = {
     label: wallet.label || leaderboard?.userName || wallet.label,
@@ -375,9 +493,9 @@ export async function syncWalletRecord(base44: any, wallet: any): Promise<any> {
     all_time_volume_usd: leaderboard?.vol ?? wallet.all_time_volume_usd ?? 0,
     activity_count_synced: existingKeys.size,
     distinct_markets_synced: distinctMarkets,
-    open_positions_count: positions.length,
-    open_positions_value_usd: openValue,
-    open_positions_unrealized_pnl_usd: openPnl,
+    open_positions_count: openAgg.count,
+    open_positions_value_usd: openAgg.valueUsd,
+    open_positions_unrealized_pnl_usd: openAgg.unrealizedPnlUsd,
     first_synced_activity_at: firstAt,
     last_synced_activity_at: lastAt,
   };

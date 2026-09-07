@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { isSkilledForConsensus } from "../../shared/consensus.ts";
-import { fetchOutcomePrice } from "../../shared/polymarket.ts";
+import { fetchOutcomePrice, resolveDelayedEntryPrice } from "../../shared/polymarket.ts";
 import {
   aggregateStats,
   findHistoricalClusters,
@@ -13,6 +13,7 @@ import { withRetry } from "../../shared/retry.ts";
 const ACTIVITY_PER_WALLET = 120;
 const WALLET_BATCH = 2;
 const MAX_GAMMA_LOOKUPS = 20;
+const MAX_CLOB_LOOKUPS = 25;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -80,6 +81,17 @@ async function fetchSkilledRedeems(base44: any, wallets: any[]): Promise<any[]> 
     }
   }
   return redeems;
+}
+
+function buildActivitiesByWallet(activities: any[]): Map<string, any[]> {
+  const map = new Map<string, any[]>();
+  for (const a of activities) {
+    const addr = a.wallet_address;
+    if (!addr) continue;
+    if (!map.has(addr)) map.set(addr, []);
+    map.get(addr)!.push(a);
+  }
+  return map;
 }
 
 async function resolveWithPriceFallback(
@@ -155,12 +167,20 @@ async function simulatePresets(
   now: Date
 ) {
   const allActivities = [...buys, ...redeems];
+  const activitiesByWallet = buildActivitiesByWallet(allActivities);
   const priceCache = new Map<string, number | null>();
   const gammaBudget = { left: MAX_GAMMA_LOOKUPS };
+  const clobBudget = { left: MAX_CLOB_LOOKUPS };
   const summary: any[] = [];
 
   for (const preset of presets) {
-    const clusters = findHistoricalClusters(buys, walletsByAddress, preset.params, now);
+    const clusters = findHistoricalClusters(
+      buys,
+      walletsByAddress,
+      preset.params,
+      now,
+      activitiesByWallet
+    );
     const simulated: ReturnType<typeof simulatePaperTrade>[] = [];
 
     for (const cluster of clusters) {
@@ -177,7 +197,24 @@ async function simulatePresets(
         cluster.market_title
       );
 
-      const trade = simulatePaperTrade(cluster, preset.strategy_id, preset.params, resolution);
+      let entryPrice: number | undefined;
+      if (clobBudget.left > 0) {
+        clobBudget.left -= 1;
+        entryPrice = await resolveDelayedEntryPrice(
+          cluster,
+          preset.params.delaySec,
+          preset.params.slippage
+        );
+        await sleep(80);
+      }
+
+      const trade = simulatePaperTrade(
+        cluster,
+        preset.strategy_id,
+        preset.params,
+        resolution,
+        entryPrice
+      );
       simulated.push(trade);
 
       const existing = existingByKey.get(trade.trade_key);

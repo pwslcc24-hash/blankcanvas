@@ -16,6 +16,7 @@ import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp, Users, ExternalLink } from "lucide-react";
 import { tradePolymarketUrlSync, openTradePolymarketUrl } from "@/lib/polymarketLinks";
+import PlatformNotice from "@/components/PlatformNotice";
 import {
   Dialog,
   DialogContent,
@@ -215,63 +216,72 @@ function combineStats(a, b) {
   };
 }
 
+/** All-time stats without double-counting signals that appear in both past test and live paper. */
+function statsFromTradesDeduped(backtestTrades, liveTrades) {
+  const bySignal = new Map();
+  for (const t of backtestTrades) {
+    if (t.signal_key) bySignal.set(t.signal_key, t);
+  }
+  for (const t of liveTrades) {
+    if (t.signal_key) bySignal.set(t.signal_key, t);
+  }
+  return statsFromTrades([...bySignal.values()]);
+}
+
 function confidenceScore(allStats, liveStats) {
   let score = 0;
   const allN = allStats.resolved || 0;
-  const pastN = (allStats.resolved || 0) - (liveStats.resolved || 0);
   const liveN = liveStats.resolved || 0;
   const allRoi = allStats.roi ?? 0;
   const liveRoi = liveStats.roi ?? 0;
 
-  if (allN >= 30) score += 40;
-  else if (allN >= 20) score += 32;
-  else if (allN >= 10) score += 24;
-  else if (allN >= 5) score += 15;
-  else if (allN >= 1) score += 5;
+  if (allN >= 30) score += 30;
+  else if (allN >= 20) score += 22;
+  else if (allN >= 10) score += 14;
+  else if (allN >= 5) score += 8;
+  else if (allN >= 1) score += 2;
 
-  if (allRoi >= 0.2) score += 25;
-  else if (allRoi >= 0.1) score += 20;
-  else if (allRoi >= 0.05) score += 15;
-  else if (allRoi >= 0) score += 8;
+  if (allRoi >= 0.1 && allN >= 10) score += 15;
+  else if (allRoi >= 0.05 && allN >= 10) score += 10;
+  else if (allRoi >= 0 && allN >= 10) score += 5;
 
   if (allN >= 10) {
     const wr = allStats.winRate ?? 0;
-    if (wr >= 0.55 && wr <= 0.8) score += 15;
-    else if (wr > 0.8) score += 10;
-    else if (wr >= 0.45) score += 8;
-    else score += 3;
-  } else if (allN >= 5 && (allStats.winRate ?? 0) >= 0.6) {
-    score += 8;
+    if (wr >= 0.5 && wr <= 0.75) score += 10;
+    else if (wr >= 0.45) score += 5;
   }
 
-  if (liveN >= 10) {
+  if (liveN >= 20) {
     if (liveRoi >= 0) score += 20;
-    else score += 5;
-  } else if (liveN >= 5) {
-    if (liveRoi >= 0) score += 14;
     else score += 4;
-  } else if (liveN >= 1) {
-    score += liveRoi >= 0 ? 6 : 2;
+  } else if (liveN >= 10) {
+    if (liveRoi >= 0) score += 12;
+    else score += 3;
+  } else if (liveN >= 5) {
+    score += liveRoi >= 0 ? 6 : 1;
   }
 
-  if (pastN >= 10 && liveN >= 3) score += 5;
+  // Hard caps — small samples cannot score high
+  if (allN < 30) score = Math.min(score, 45);
+  if (liveN < 10) score = Math.min(score, 35);
+  if (allN < 10) score = Math.min(score, 25);
 
   const clamped = Math.min(100, Math.max(0, score));
   let label = "Not ready";
   let className = "bg-red-500/10 text-red-700 border-red-500/30";
-  let advice = "Need more past-test trades before considering real money.";
-  if (clamped >= 75) {
+  let advice = "Need 30+ unique finished trades and 10+ live-paper trades before trusting this.";
+  if (clamped >= 75 && allN >= 30 && liveN >= 10) {
     label = "High";
     className = "bg-emerald-500/10 text-emerald-700 border-emerald-500/30";
-    advice = "Strong candidate — still start small and keep watching live paper.";
-  } else if (clamped >= 50) {
+    advice = "Meets minimum sample — still start small and keep forward-testing.";
+  } else if (clamped >= 50 && allN >= 20) {
     label = "Moderate";
     className = "bg-blue-500/10 text-blue-700 border-blue-500/30";
-    advice = "Promising but keep paper trading until you hit 30+ past trades.";
+    advice = "Promising but keep paper trading — need more live validation.";
   } else if (clamped >= 25) {
     label = "Low";
     className = "bg-amber-500/10 text-amber-700 border-amber-500/30";
-    advice = "Too early to trust — wait for more finished trades.";
+    advice = "Too early to trust — wait for more independent forward trades.";
   }
 
   return { score: clamped, label, className, advice };
@@ -283,12 +293,16 @@ function allStatsForStrategy(strategy, liveStatsByStrategy) {
   return combineStats(past, live);
 }
 
+function allStatsForSelected(backtestTrades, liveTrades) {
+  return statsFromTradesDeduped(backtestTrades, liveTrades);
+}
+
 function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakePerTrade, pastRange, liveRange, allRange }) {
   return (
     <Card className="border-2 border-primary/20">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Performance at a glance</CardTitle>
-        <CardDescription>Past + live combined — use all-time % to pick a strategy</CardDescription>
+        <CardDescription>Past + live deduped by signal — all-time % avoids double-counting</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -962,7 +976,10 @@ export default function Strategies() {
   const liveTrades = useMemo(() => selectedTrades.filter((t) => !t.is_backtest), [selectedTrades]);
   const backtestStats = useMemo(() => statsFromStrategyEntity(selected), [selected]);
   const liveStats = useMemo(() => statsFromTrades(liveTrades), [liveTrades]);
-  const allStats = useMemo(() => combineStats(backtestStats, liveStats), [backtestStats, liveStats]);
+  const allStats = useMemo(
+    () => allStatsForSelected(backtestTrades, liveTrades),
+    [backtestTrades, liveTrades]
+  );
   const confidence = useMemo(
     () => confidenceScore(allStats, liveStats),
     [allStats, liveStats]
@@ -1044,7 +1061,7 @@ export default function Strategies() {
             Strategy lab
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Fake money only · Big % = all-time (past + live)
+            Fake money only · All-time % dedupes past + live on the same signal
             {globalDataRange && <> · Trades from {formatRange(globalDataRange)}</>}
           </p>
           <p className="text-muted-foreground text-xs mt-1">
@@ -1060,6 +1077,8 @@ export default function Strategies() {
           Run full backtest
         </Button>
       </div>
+
+      <PlatformNotice />
 
       {best && bestAllStats && (
         <Card className="border-emerald-500/30 bg-emerald-500/5">

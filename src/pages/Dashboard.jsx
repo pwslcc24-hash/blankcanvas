@@ -15,6 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/use-toast";
+import PlatformNotice from "@/components/PlatformNotice";
 import {
   Wallet,
   Plus,
@@ -265,6 +266,8 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <PlatformNotice />
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
@@ -274,13 +277,13 @@ export default function Dashboard() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Open positions value</CardDescription>
+            <CardDescription>Open positions value (active only)</CardDescription>
             <CardTitle className="text-2xl">{usd(totals.value)}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Open positions unrealized PnL</CardDescription>
+            <CardDescription>Unrealized PnL (active positions)</CardDescription>
             <CardTitle className={`text-2xl ${totals.pnl >= 0 ? "text-emerald-600" : "text-red-600"}`}>
               {usd(totals.pnl)}
             </CardTitle>

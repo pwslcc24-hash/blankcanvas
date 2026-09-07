@@ -85,10 +85,20 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
 ];
 
 export function walletMatchesStrategy(wallet: any, params: StrategyParams): boolean {
-  const grade = wallet?.skill_grade;
-  const conf = wallet?.score_confidence;
+  return walletMatchesStrategyFromScore(
+    { grade: wallet?.skill_grade, confidence: wallet?.score_confidence },
+    params
+  );
+}
+
+export function walletMatchesStrategyFromScore(
+  score: { grade?: string; confidence?: string },
+  params: StrategyParams
+): boolean {
+  const grade = score?.grade;
+  const conf = score?.confidence;
   if (!grade || !conf) return false;
-  if (!params.grades.includes(grade)) return false;
+  if (!params.grades.includes(grade as "A" | "B")) return false;
   if (params.minConfidence === "high" && conf !== "high") return false;
   if (params.minConfidence === "medium" && conf !== "medium" && conf !== "high") return false;
   return true;

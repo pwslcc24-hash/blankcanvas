@@ -102,6 +102,9 @@ export default function WalletDetail() {
   if (!wallet) return null;
 
   const pnl = Number(wallet.all_time_pnl_usd || 0);
+  const activePositions = positions.filter(
+    (p) => Number(p.current_value_usd || 0) > 0.01 && !p.redeemable
+  );
 
   return (
     <div className="space-y-6">
@@ -259,7 +262,7 @@ export default function WalletDetail() {
       <Tabs defaultValue="activity">
         <TabsList>
           <TabsTrigger value="activity">Activity ({activity.length})</TabsTrigger>
-          <TabsTrigger value="positions">Open positions ({positions.length})</TabsTrigger>
+          <TabsTrigger value="positions">Open positions ({activePositions.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="activity">
@@ -321,8 +324,8 @@ export default function WalletDetail() {
         <TabsContent value="positions">
           <Card>
             <CardContent className="pt-6">
-              {positions.length === 0 ? (
-                <p className="text-muted-foreground text-sm py-8 text-center">No open positions.</p>
+              {activePositions.length === 0 ? (
+                <p className="text-muted-foreground text-sm py-8 text-center">No active open positions.</p>
               ) : (
                 <Table>
                   <TableHeader>
@@ -338,7 +341,7 @@ export default function WalletDetail() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {positions.map((p) => (
+                    {activePositions.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell className="max-w-xs truncate">
                           {p.market_slug ? (

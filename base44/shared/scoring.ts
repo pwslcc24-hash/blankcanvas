@@ -251,3 +251,16 @@ export function computeWalletScore(
     calibrated_market_count: calibratedMarketCount,
   };
 }
+
+/** Score using only activity that occurred before asOfMs (honest backtest filter). */
+export function computeWalletScoreAsOf(
+  wallet: any,
+  activities: any[],
+  asOfMs: number
+): WalletScoreResult {
+  const filtered = activities.filter((a) => {
+    const t = a.occurred_at ? new Date(a.occurred_at).getTime() : NaN;
+    return Number.isFinite(t) && t < asOfMs;
+  });
+  return computeWalletScore(wallet, filtered, []);
+}

@@ -8,8 +8,9 @@ import {
   type ConsensusParticipant,
 } from "./consensus.ts";
 import { fetchOutcomePrice } from "./polymarket.ts";
+import { computeWalletScoreAsOf } from "./scoring.ts";
 import type { StrategyParams } from "./strategies.ts";
-import { walletMatchesStrategy } from "./strategies.ts";
+import { walletMatchesStrategy, walletMatchesStrategyFromScore } from "./strategies.ts";
 
 export interface HistoricalCluster extends ConsensusGroup {
   detected_at_ms: number;
@@ -59,7 +60,8 @@ export function findHistoricalClusters(
   buys: any[],
   walletsByAddress: Map<string, any>,
   params: StrategyParams,
-  now: Date = new Date()
+  now: Date = new Date(),
+  activitiesByWallet?: Map<string, any[]>
 ): HistoricalCluster[] {
   const windowMs = params.windowHours * 3600 * 1000;
   const sinceMs = now.getTime() - params.lookbackDays * 86400000;
@@ -69,7 +71,7 @@ export function findHistoricalClusters(
     if (buy.event_type !== "TRADE" || buy.side !== "BUY") continue;
     if (!buy.condition_id || buy.outcome_index == null) continue;
     const wallet = walletsByAddress.get(buy.wallet_address);
-    if (!wallet || !walletMatchesStrategy(wallet, params)) continue;
+    if (!wallet) continue;
     const t = buy.occurred_at ? new Date(buy.occurred_at).getTime() : NaN;
     if (!Number.isFinite(t) || t < sinceMs) continue;
 
@@ -77,6 +79,16 @@ export function findHistoricalClusters(
     if (!byMarket.has(key)) byMarket.set(key, []);
     byMarket.get(key)!.push({ buy, wallet, t });
   }
+
+  const walletQualifiesAt = (wallet: any, signalMs: number): boolean => {
+    if (!activitiesByWallet) return walletMatchesStrategy(wallet, params);
+    const acts = activitiesByWallet.get(wallet.address) || [];
+    const score = computeWalletScoreAsOf(wallet, acts, signalMs);
+    return walletMatchesStrategyFromScore(
+      { grade: score.grade, confidence: score.confidence },
+      params
+    );
+  };
 
   const seen = new Set<string>();
   const clusters: HistoricalCluster[] = [];
@@ -94,6 +106,16 @@ export function findHistoricalClusters(
         activeWallets.get(addr)!.push(rows[start]);
       }
 
+      if (activeWallets.size < params.minWallets) continue;
+
+      const signalMs = rows[end].t;
+      // Re-check each wallet using only data available before the signal.
+      for (const [address] of [...activeWallets]) {
+        const wallet = walletsByAddress.get(address);
+        if (!wallet || !walletQualifiesAt(wallet, signalMs)) {
+          activeWallets.delete(address);
+        }
+      }
       if (activeWallets.size < params.minWallets) continue;
 
       let windowStartT = rows[end].t;
@@ -337,14 +359,15 @@ export function simulatePaperTrade(
   cluster: HistoricalCluster | ConsensusGroup,
   strategyId: string,
   params: StrategyParams,
-  resolution: { status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string }
+  resolution: { status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string },
+  entryPriceOverride?: number
 ): SimulatedTrade {
   const signalMs = new Date(cluster.last_buy_at).getTime();
   const entryMs = signalMs + params.delaySec * 1000;
-  const entryPrice = Math.min(
-    0.99,
-    Math.max(0.01, cluster.vwap_entry_price + params.slippage)
-  );
+  const entryPrice =
+    entryPriceOverride != null && Number.isFinite(entryPriceOverride)
+      ? Math.min(0.99, Math.max(0.01, entryPriceOverride))
+      : Math.min(0.99, Math.max(0.01, cluster.vwap_entry_price + params.slippage));
   const stake = params.stakeUsd;
   const fee = stake * params.feeRate;
   const shares = (stake - fee) / entryPrice;

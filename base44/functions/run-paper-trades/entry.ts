@@ -2,6 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk";
 import { alertMatchesStrategy, STRATEGY_PRESETS } from "../../shared/strategies.ts";
 import { isSkilledForConsensus } from "../../shared/consensus.ts";
 import { resolveTradeOutcome, simulatePaperTrade, applyPaperTradeResolution, refreshBacktestStrategyStats, resolveOpenTrade } from "../../shared/paper-trading.ts";
+import { resolveDelayedEntryPrice } from "../../shared/polymarket.ts";
 import { withRetry } from "../../shared/retry.ts";
 
 const MAX_CREATES_PER_RUN = 40;
@@ -128,7 +129,24 @@ export default async function (req: Request): Promise<Response> {
           redeems
         );
 
-        const trade = simulatePaperTrade(cluster, preset.strategy_id, preset.params, resolution);
+        let entryPrice: number | undefined;
+        try {
+          entryPrice = await resolveDelayedEntryPrice(
+            cluster,
+            preset.params.delaySec,
+            preset.params.slippage
+          );
+        } catch {
+          /* fall back to VWAP inside simulatePaperTrade */
+        }
+
+        const trade = simulatePaperTrade(
+          cluster,
+          preset.strategy_id,
+          preset.params,
+          resolution,
+          entryPrice
+        );
         try {
           await base44.entities.PaperTrade.create({
             ...trade,
