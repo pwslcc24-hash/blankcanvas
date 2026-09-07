@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
-import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp, Users } from "lucide-react";
+import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp, Users, ExternalLink } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -438,6 +438,19 @@ function shortAddress(addr) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+function polymarketUrl(slug, conditionId) {
+  if (slug) return `https://polymarket.com/event/${slug}`;
+  if (conditionId) return `https://polymarket.com/market/${conditionId}`;
+  return null;
+}
+
+function tradePolymarketUrl(trade, alerts) {
+  if (trade.market_slug) return polymarketUrl(trade.market_slug, trade.condition_id);
+  const alert = findAlertForTrade(trade, alerts);
+  if (alert) return polymarketUrl(alert.market_slug, alert.condition_id);
+  return polymarketUrl(null, trade.condition_id);
+}
+
 function findAlertForTrade(trade, alerts) {
   const exact = alerts.find((a) => a.signal_key === trade.signal_key);
   if (exact) return exact;
@@ -551,7 +564,7 @@ function ParticipantsList({ participants }) {
   );
 }
 
-function TradeTable({ trades, onViewWallets, loadingTradeKey }) {
+function TradeTable({ trades, alerts, onViewWallets, loadingTradeKey }) {
   if (!trades.length) {
     return <p className="text-sm text-muted-foreground px-6 py-8 text-center">No trades in this view.</p>;
   }
@@ -622,7 +635,25 @@ function TradeTable({ trades, onViewWallets, loadingTradeKey }) {
                     See {t.wallet_count} wallets
                   </button>
                 </TableCell>
-                <TableCell className="text-sm">{t.outcome || "—"}</TableCell>
+                <TableCell className="text-sm" onClick={(e) => e.stopPropagation()}>
+                  {(() => {
+                    const url = tradePolymarketUrl(t, alerts);
+                    const label = t.outcome || "—";
+                    if (!url || label === "—") return label;
+                    return (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline inline-flex items-center gap-1 font-medium"
+                        title="Open this bet on Polymarket"
+                      >
+                        {label}
+                        <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+                      </a>
+                    );
+                  })()}
+                </TableCell>
                 <TableCell>
                   <Button
                     type="button"
@@ -1167,6 +1198,7 @@ export default function Strategies() {
               <CardContent className="p-0 pb-2">
                 <TradeTable
                   trades={filteredTrades.slice(0, 100)}
+                  alerts={alerts}
                   onViewWallets={openWalletDialog}
                   loadingTradeKey={loadingTradeKey}
                 />
