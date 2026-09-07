@@ -152,8 +152,8 @@ export async function resolvePolymarketLink(opts: {
     return { url: fromSlug, slug: opts.marketSlug || null, eventSlug: opts.marketSlug || null };
   }
 
-  const query = opts.marketTitle || opts.conditionId;
-  if (!query) return { url: null, slug: null, eventSlug: null };
+  const query = opts.marketTitle || (opts.conditionId && !opts.conditionId.startsWith("0x") ? opts.conditionId : null);
+  if (!query && !opts.marketSlug) return { url: null, slug: null, eventSlug: null };
 
   try {
     const params = new URLSearchParams({ q: query });
@@ -221,42 +221,57 @@ function buildPolymarketUrlFromGamma(event: any, market?: any): string | null {
   return null;
 }
 
-/** Best-effort current mid price (0-1) for a market outcome via Gamma API. */
-export async function fetchOutcomePrice(
-  conditionId: string,
-  outcomeIndex: number
-): Promise<number | null> {
-  if (!conditionId) return null;
+/** Fetch a single market record by slug (reliable Gamma endpoint). */
+export async function fetchMarketBySlug(slug: string): Promise<any | null> {
+  if (!slug) return null;
   try {
-    const params = new URLSearchParams({ condition_ids: conditionId });
-    const markets = await getJson(`${GAMMA_API}/markets?${params.toString()}`);
-    const list = Array.isArray(markets) ? markets : markets?.data || [];
-    const market = list[0];
-    if (!market) return null;
-
-    const tokens = market.tokens || market.clobTokenIds || [];
-    if (Array.isArray(tokens) && tokens.length) {
-      const token = tokens.find(
-        (t: any) =>
-          t.outcomeIndex === outcomeIndex ||
-          t.outcome_index === outcomeIndex ||
-          Number(t.index) === outcomeIndex
-      );
-      if (token?.price != null) return Number(token.price);
-    }
-
-    // Gamma sometimes exposes outcomePrices as parallel arrays
-    const prices = market.outcomePrices;
-    if (prices != null) {
-      const parsed = typeof prices === "string" ? JSON.parse(prices) : prices;
-      if (Array.isArray(parsed) && parsed[outcomeIndex] != null) {
-        return Number(parsed[outcomeIndex]);
-      }
-    }
-    return null;
+    return await getJson(`${GAMMA_API}/markets/slug/${encodeURIComponent(slug)}`);
   } catch {
     return null;
   }
+}
+
+function outcomePriceFromMarket(market: any, outcomeIndex: number): number | null {
+  if (!market) return null;
+  const prices = market.outcomePrices;
+  if (prices != null) {
+    const parsed = typeof prices === "string" ? JSON.parse(prices) : prices;
+    if (Array.isArray(parsed) && parsed[outcomeIndex] != null) {
+      return Number(parsed[outcomeIndex]);
+    }
+  }
+  return null;
+}
+
+/** Best-effort current mid price (0-1) for a market outcome via Gamma API. */
+export async function fetchOutcomePrice(
+  conditionId: string,
+  outcomeIndex: number,
+  marketSlug?: string | null,
+  marketTitle?: string | null
+): Promise<number | null> {
+  if (!conditionId) return null;
+  try {
+    if (marketSlug) {
+      const bySlug = await fetchMarketBySlug(marketSlug);
+      if (bySlug?.conditionId?.toLowerCase() === conditionId.toLowerCase()) {
+        return outcomePriceFromMarket(bySlug, outcomeIndex);
+      }
+    }
+
+    const resolved = await resolvePolymarketLink({
+      conditionId,
+      marketTitle: marketTitle || undefined,
+      marketSlug: marketSlug || undefined,
+    });
+    if (resolved.slug) {
+      const bySlug = await fetchMarketBySlug(resolved.slug);
+      if (bySlug) return outcomePriceFromMarket(bySlug, outcomeIndex);
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
 }
 
 function activityDedupeKey(address: string, a: any): string {

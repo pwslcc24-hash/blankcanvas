@@ -55,6 +55,30 @@ export function tradePolymarketUrlSync(trade, alerts, urlCache) {
   return null;
 }
 
+export { findAlertForTrade };
+
+export async function openTradePolymarketUrl(trade, alerts, urlCache, invokeResolve) {
+  const key = trade.id || trade.trade_key;
+  const cached = urlCache?.[key] || tradePolymarketUrlSync(trade, alerts, urlCache);
+  if (cached) {
+    window.open(cached, "_blank", "noopener,noreferrer");
+    return cached;
+  }
+
+  const alert = findAlertForTrade(trade, alerts);
+  const res = await invokeResolve({
+    condition_id: trade.condition_id,
+    market_title: trade.market_title,
+    market_slug: trade.market_slug || alert?.market_slug,
+  });
+  const url = res?.url || res?.data?.url;
+  if (url) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return url;
+  }
+  return null;
+}
+
 function findAlertForTrade(trade, alerts) {
   const exact = alerts.find((a) => a.signal_key === trade.signal_key);
   if (exact) return exact;

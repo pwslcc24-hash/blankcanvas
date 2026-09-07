@@ -15,7 +15,7 @@ import {
 import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { FlaskConical, Loader2, RefreshCw, Trophy, TrendingUp, Users, ExternalLink } from "lucide-react";
-import { tradePolymarketUrlSync } from "@/lib/polymarketLinks";
+import { tradePolymarketUrlSync, openTradePolymarketUrl } from "@/lib/polymarketLinks";
 import {
   Dialog,
   DialogContent,
@@ -552,7 +552,7 @@ function ParticipantsList({ participants }) {
   );
 }
 
-function TradeTable({ trades, alerts, polymarketUrls, onViewWallets, loadingTradeKey }) {
+function TradeTable({ trades, alerts, polymarketUrls, onViewWallets, onOpenBet, loadingTradeKey }) {
   if (!trades.length) {
     return <p className="text-sm text-muted-foreground px-6 py-8 text-center">No trades in this view.</p>;
   }
@@ -627,24 +627,33 @@ function TradeTable({ trades, alerts, polymarketUrls, onViewWallets, loadingTrad
                   {(() => {
                     const url = tradePolymarketUrlSync(t, alerts, polymarketUrls);
                     const label = t.outcome || "—";
-                    if (!url || label === "—") {
+                    if (label === "—") {
+                      return <span className="text-muted-foreground">{label}</span>;
+                    }
+                    if (url) {
                       return (
-                        <span className="text-muted-foreground" title="Link loading or unavailable">
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline inline-flex items-center gap-1 font-medium"
+                          title="Open this bet on Polymarket"
+                        >
                           {label}
-                        </span>
+                          <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+                        </a>
                       );
                     }
                     return (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
                         className="text-primary hover:underline inline-flex items-center gap-1 font-medium"
                         title="Open this bet on Polymarket"
+                        onClick={() => onOpenBet(t)}
                       >
                         {label}
                         <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
-                      </a>
+                      </button>
                     );
                   })()}
                 </TableCell>
@@ -883,6 +892,33 @@ export default function Strategies() {
       setWalletDialogLoading(false);
     },
     [loadParticipantsForTrade]
+  );
+
+  const handleOpenBet = useCallback(
+    async (trade) => {
+      const key = trade.id || trade.trade_key;
+      try {
+        const url = await openTradePolymarketUrl(trade, alerts, polymarketUrls, (payload) =>
+          base44.functions.invoke("resolve-polymarket-url", payload).then((res) => res.data)
+        );
+        if (url && key) {
+          setPolymarketUrls((prev) => ({ ...prev, [key]: url }));
+        } else {
+          toast({
+            title: "Polymarket link unavailable",
+            description: "Could not find this market on Polymarket.",
+            variant: "destructive",
+          });
+        }
+      } catch {
+        toast({
+          title: "Polymarket link failed",
+          description: "Try again in a moment.",
+          variant: "destructive",
+        });
+      }
+    },
+    [alerts, polymarketUrls]
   );
 
   const runBacktest = useCallback(async () => {
@@ -1239,6 +1275,7 @@ export default function Strategies() {
                   alerts={alerts}
                   polymarketUrls={polymarketUrls}
                   onViewWallets={openWalletDialog}
+                  onOpenBet={handleOpenBet}
                   loadingTradeKey={loadingTradeKey}
                 />
               </CardContent>

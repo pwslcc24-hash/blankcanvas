@@ -1,10 +1,28 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { alertMatchesStrategy, STRATEGY_PRESETS } from "../../shared/strategies.ts";
 import { isSkilledForConsensus } from "../../shared/consensus.ts";
-import { resolveTradeOutcome, simulatePaperTrade } from "../../shared/paper-trading.ts";
+import { resolveTradeOutcome, simulatePaperTrade, applyPaperTradeResolution, refreshBacktestStrategyStats, resolveOpenTrade } from "../../shared/paper-trading.ts";
 import { withRetry } from "../../shared/retry.ts";
 
 const MAX_CREATES_PER_RUN = 40;
+const MAX_RESOLVES_PER_RUN = 150;
+
+async function enrichTradeFromActivity(base44: any, trade: any) {
+  if (trade.market_slug) return trade;
+  try {
+    const activity = await base44.entities.WalletActivity.filter(
+      { condition_id: trade.condition_id },
+      "-occurred_at",
+      1
+    );
+    if (activity[0]?.market_slug) {
+      return { ...trade, market_slug: activity[0].market_slug };
+    }
+  } catch {
+    /* best-effort */
+  }
+  return trade;
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -62,12 +80,8 @@ export default async function (req: Request): Promise<Response> {
     const inactive = new Set(
       strategyRows.filter((s: any) => s.is_active === false).map((s: any) => s.strategy_id)
     );
-    const openByStrategy = new Map<string, any[]>();
-    for (const t of forwardTrades) {
-      if (t.status !== "open") continue;
-      if (!openByStrategy.has(t.strategy_id)) openByStrategy.set(t.strategy_id, []);
-      openByStrategy.get(t.strategy_id)!.push(t);
-    }
+
+    const openTradesAll = await base44.entities.PaperTrade.filter({ status: "open" }, "-entry_at", MAX_RESOLVES_PER_RUN);
 
     let entered = 0;
     let resolved = 0;
@@ -137,41 +151,41 @@ export default async function (req: Request): Promise<Response> {
       }
 
       if (skippedRateLimit) break;
+    }
 
-      const openTrades = openByStrategy.get(preset.strategy_id) || [];
-      for (const t of openTrades) {
-        const entryMs = new Date(t.entry_at).getTime();
-        const resolution = resolveTradeOutcome(
-          t.condition_id,
-          t.outcome_index ?? 0,
-          entryMs,
-          redeems
-        );
-        if (resolution.status === "open") continue;
-
-        const exitPrice = resolution.exit_price ?? 0;
-        const proceeds = (t.shares || 0) * exitPrice;
-        const pnl = Math.round((proceeds - (t.stake_usd || 0)) * 100) / 100;
-
-        try {
-          await base44.entities.PaperTrade.update(t.id, {
-            status: resolution.status,
-            exit_at: resolution.exit_at,
-            exit_price: exitPrice,
-            pnl_usd: pnl,
-          });
-          resolved += 1;
-          await sleep(80);
-        } catch (err: any) {
-          if (/rate limit/i.test(String(err?.message || err))) {
-            skippedRateLimit = true;
-            break;
-          }
-          throw err;
-        }
-      }
-
+    const backtestStrategyIds: string[] = [];
+    for (const t of openTradesAll) {
       if (skippedRateLimit) break;
+      const trade = await enrichTradeFromActivity(base44, t);
+      const resolution = await resolveOpenTrade(trade, redeems);
+      if (resolution.status === "open") continue;
+
+      const patch = applyPaperTradeResolution(trade, resolution);
+      if (!patch) continue;
+
+      try {
+        await base44.entities.PaperTrade.update(t.id, {
+          ...patch,
+          ...(trade.market_slug && !t.market_slug ? { market_slug: trade.market_slug } : {}),
+        });
+        resolved += 1;
+        if (t.is_backtest) backtestStrategyIds.push(t.strategy_id);
+        await sleep(100);
+      } catch (err: any) {
+        if (/rate limit/i.test(String(err?.message || err))) {
+          skippedRateLimit = true;
+          break;
+        }
+        throw err;
+      }
+    }
+
+    if (backtestStrategyIds.length && !skippedRateLimit) {
+      try {
+        await refreshBacktestStrategyStats(base44, backtestStrategyIds);
+      } catch {
+        /* stats refresh is best-effort */
+      }
     }
 
     return Response.json({

@@ -89,25 +89,25 @@ async function resolveWithPriceFallback(
   allActivities: any[],
   priceCache: Map<string, number | null>,
   gammaBudget: { left: number },
-  now: Date
+  now: Date,
+  marketSlug?: string | null,
+  marketTitle?: string | null
 ) {
-  let resolution = resolveTradeOutcome(conditionId, outcomeIndex, entryMs, allActivities);
-  if (resolution.status !== "open") return resolution;
-
-  const cacheKey = `${conditionId}|${outcomeIndex}`;
+  const cacheKey = `${conditionId}|${outcomeIndex}|${marketSlug || ""}|${marketTitle || ""}`;
   if (!priceCache.has(cacheKey) && gammaBudget.left > 0) {
     gammaBudget.left -= 1;
-    priceCache.set(cacheKey, await fetchOutcomePrice(conditionId, outcomeIndex));
+    priceCache.set(
+      cacheKey,
+      await fetchOutcomePrice(conditionId, outcomeIndex, marketSlug, marketTitle)
+    );
     await sleep(100);
   }
   const p = priceCache.get(cacheKey);
-  if (p != null && p >= 0.95) {
-    return { status: "won" as const, exit_price: 1, exit_at: now.toISOString() };
+  if (p != null && Number.isFinite(p) && (p >= 0.95 || p <= 0.05)) {
+    return resolveTradeOutcome(conditionId, outcomeIndex, entryMs, allActivities, p);
   }
-  if (p != null && p <= 0.05) {
-    return { status: "lost" as const, exit_price: 0, exit_at: now.toISOString() };
-  }
-  return resolution;
+
+  return resolveTradeOutcome(conditionId, outcomeIndex, entryMs, allActivities);
 }
 
 async function refreshStatsFromDb(base44: any, now: Date) {
@@ -172,7 +172,9 @@ async function simulatePresets(
         allActivities,
         priceCache,
         gammaBudget,
-        now
+        now,
+        cluster.market_slug,
+        cluster.market_title
       );
 
       const trade = simulatePaperTrade(cluster, preset.strategy_id, preset.params, resolution);

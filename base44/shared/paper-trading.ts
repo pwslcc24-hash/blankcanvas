@@ -228,7 +228,6 @@ export function buildParticipantsForSignal(
   return participants;
 }
 
-/** Resolve binary market outcome from synced REDEEM activity or Gamma closed prices. */
 export function resolveTradeOutcome(
   conditionId: string,
   outcomeIndex: number,
@@ -275,6 +274,63 @@ export function resolveTradeOutcome(
   }
 
   return { status: "open" };
+}
+
+/** Resolve an open paper trade using Gamma closed prices first, then redeems. */
+export async function resolveOpenTrade(
+  trade: any,
+  activities: any[]
+): Promise<{ status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string }> {
+  const entryMs = new Date(trade.entry_at).getTime();
+  const outcomeIndex = trade.outcome_index ?? 0;
+
+  const price = await fetchOutcomePrice(
+    trade.condition_id,
+    outcomeIndex,
+    trade.market_slug,
+    trade.market_title
+  );
+  if (price != null && Number.isFinite(price) && (price >= 0.95 || price <= 0.05)) {
+    return resolveTradeOutcome(trade.condition_id, outcomeIndex, entryMs, activities, price);
+  }
+
+  return resolveTradeOutcome(trade.condition_id, outcomeIndex, entryMs, activities);
+}
+
+export function applyPaperTradeResolution(
+  trade: any,
+  resolution: { status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string }
+) {
+  if (resolution.status === "open") return null;
+  const exitPrice = resolution.exit_price ?? 0;
+  const proceeds = (trade.shares || 0) * exitPrice;
+  const pnl = Math.round((proceeds - (trade.stake_usd || 0)) * 100) / 100;
+  return {
+    status: resolution.status,
+    exit_at: resolution.exit_at,
+    exit_price: exitPrice,
+    pnl_usd: pnl,
+  };
+}
+
+export async function refreshBacktestStrategyStats(base44: any, strategyIds: string[]) {
+  const unique = [...new Set(strategyIds.filter(Boolean))];
+  const now = new Date().toISOString();
+  for (const strategyId of unique) {
+    const trades = await base44.entities.PaperTrade.filter(
+      { strategy_id: strategyId, is_backtest: true },
+      "-entry_at",
+      2500
+    );
+    const stats = aggregateStats(trades);
+    const rows = await base44.entities.PaperStrategy.filter({ strategy_id: strategyId });
+    if (rows.length) {
+      await base44.entities.PaperStrategy.update(rows[0].id, {
+        ...stats,
+        last_backtest_at: now,
+      });
+    }
+  }
 }
 
 export function simulatePaperTrade(
