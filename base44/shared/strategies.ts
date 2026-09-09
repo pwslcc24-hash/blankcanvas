@@ -44,11 +44,15 @@ function preset(
   return { strategy_id, name, params: { ...BASE, ...overrides } };
 }
 
-/** ~20 variants covering wallet count, window, grade gate, drift, slippage, delay. */
+/** ~21 variants covering wallet count, window, grade gate, drift, slippage, delay. */
 export const STRATEGY_PRESETS: StrategyPreset[] = [
   preset("baseline-3ab-6h", "Baseline: 3 wallets, A/B, 6h, strong", {}),
   preset("strict-4ab-6h", "Strict: 4 wallets, A/B, 6h", { minWallets: 4 }),
   preset("strict-5ab-6h", "Strict: 5 wallets, A/B, 6h", { minWallets: 5 }),
+  preset("elite-2a-6h", "Elite: 2 A-grade wallets", {
+    minWallets: 2,
+    grades: ["A"],
+  }),
   preset("elite-3a-high-6h", "Elite: 3 A-grade, high confidence", {
     grades: ["A"],
     minConfidence: "high",
@@ -104,10 +108,34 @@ export function walletMatchesStrategyFromScore(
   return true;
 }
 
+function participantsFromAlert(alert: any): any[] {
+  if (Array.isArray(alert?.participants)) return alert.participants;
+  try {
+    const parsed = JSON.parse(alert?.participants_json || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Count wallets in an alert that match this strategy's grade/confidence gate. */
+export function qualifyingWalletCount(alert: any, params: StrategyParams): number {
+  const participants = participantsFromAlert(alert);
+  if (participants.length) {
+    return participants.filter((p) =>
+      walletMatchesStrategyFromScore(
+        { grade: p.grade, confidence: p.confidence },
+        params
+      )
+    ).length;
+  }
+  return Number(alert?.wallet_count) || 0;
+}
+
 export function alertMatchesStrategy(alert: any, params: StrategyParams): boolean {
   if (!params.qualities.includes(alert.quality)) return false;
   if (alert.price_drift != null && alert.price_drift > params.maxPriceDrift) return false;
   if (params.minTotalUsdc && (alert.total_usdc || 0) < params.minTotalUsdc) return false;
-  if (alert.wallet_count < params.minWallets) return false;
+  if (qualifyingWalletCount(alert, params) < params.minWallets) return false;
   return true;
 }

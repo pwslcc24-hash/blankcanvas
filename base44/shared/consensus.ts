@@ -38,7 +38,7 @@ export interface ConsensusDetectOptions {
 
 const DEFAULT_OPTS: Required<Omit<ConsensusDetectOptions, "now">> = {
   windowHours: 6,
-  minWallets: 3,
+  minWallets: 2,
   maxPriceDriftStrong: 0.02,
   maxPriceDriftCaution: 0.05,
 };

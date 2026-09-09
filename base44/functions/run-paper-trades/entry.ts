@@ -5,7 +5,7 @@ import { resolveTradeOutcome, simulatePaperTrade, applyPaperTradeResolution, ref
 import { resolveDelayedEntryPrice } from "../../shared/polymarket.ts";
 import { withRetry } from "../../shared/retry.ts";
 
-const MAX_CREATES_PER_RUN = 40;
+const MAX_CREATES_PER_RUN = 80;
 const MAX_RESOLVES_PER_RUN = 150;
 
 async function enrichTradeFromActivity(base44: any, trade: any) {
@@ -70,11 +70,29 @@ export default async function (req: Request): Promise<Response> {
       redeems = [];
     }
 
-    const [alerts, forwardTrades, strategyRows] = await Promise.all([
+    const [alerts, forwardTrades, strategyRowsRaw] = await Promise.all([
       base44.entities.ConsensusAlert.filter({ status: "active" }),
       base44.entities.PaperTrade.filter({ is_backtest: false }, "-entry_at", 500),
       base44.entities.PaperStrategy.list(null, 50),
     ]);
+
+    let strategyRows = strategyRowsRaw;
+    const existingIds = new Set(strategyRows.map((s: any) => s.strategy_id));
+    for (const preset of STRATEGY_PRESETS) {
+      if (existingIds.has(preset.strategy_id)) continue;
+      try {
+        const created = await base44.entities.PaperStrategy.create({
+          strategy_id: preset.strategy_id,
+          name: preset.name,
+          params_json: JSON.stringify(preset.params),
+          is_active: true,
+        });
+        strategyRows = [...strategyRows, created];
+        existingIds.add(preset.strategy_id);
+      } catch {
+        /* next run will retry */
+      }
+    }
 
     const recentAlerts = alerts.filter((a: any) => a.detected_at >= since);
     const existingKeys = new Set(forwardTrades.map((t: any) => t.trade_key));

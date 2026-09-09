@@ -124,6 +124,8 @@ for (const name of functionNames) {
       let payload = {};
       if (name === "sync-batch" || name === "score-batch") {
         payload = { runStartedAt };
+      } else if (name === "detect-consensus") {
+        payload = { minWallets: 2 };
       } else if (name === "backtest-strategies") {
         payload = { force: true };
       }

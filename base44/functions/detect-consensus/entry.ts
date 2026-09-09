@@ -50,7 +50,7 @@ export default async function (req: Request): Promise<Response> {
 
     const body = await req.json().catch(() => ({}));
     const windowHours = Math.min(Math.max(Number(body?.windowHours) || DEFAULT_WINDOW_HOURS, 1), 24);
-    const minWallets = Math.min(Math.max(Number(body?.minWallets) || 3, 2), 10);
+    const minWallets = Math.min(Math.max(Number(body?.minWallets) || 2, 2), 10);
     const now = new Date();
 
     const wallets = await base44.entities.TrackedWallet.filter({ is_active: true });
