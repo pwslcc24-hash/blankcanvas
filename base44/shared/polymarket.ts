@@ -232,47 +232,98 @@ export async function fetchMarketBySlug(slug: string): Promise<any | null> {
   }
 }
 
-function outcomePriceFromMarket(market: any, outcomeIndex: number): number | null {
-  if (!market) return null;
-  const prices = market.outcomePrices;
-  if (prices != null) {
-    const parsed = typeof prices === "string" ? JSON.parse(prices) : prices;
-    if (Array.isArray(parsed) && parsed[outcomeIndex] != null) {
-      return Number(parsed[outcomeIndex]);
+function parseJsonArray(value: any): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
     }
+  }
+  return [];
+}
+
+export function parseMarketOutcomes(market: any): { labels: string[]; prices: number[] } {
+  const labels = parseJsonArray(market?.outcomes).map((x) => String(x));
+  const prices = parseJsonArray(market?.outcomePrices).map((x) => Number(x));
+  return { labels, prices };
+}
+
+function outcomePriceFromMarket(market: any, outcomeIndex: number): number | null {
+  const { prices } = parseMarketOutcomes(market);
+  if (prices[outcomeIndex] == null || !Number.isFinite(prices[outcomeIndex])) return null;
+  return prices[outcomeIndex];
+}
+
+function conditionIdsMatch(market: any, conditionId: string): boolean {
+  const cid = (market?.conditionId || market?.condition_id || "").toLowerCase();
+  return !!conditionId && cid === conditionId.toLowerCase();
+}
+
+/** Official Gamma market for a condition id. Never uses fuzzy title search. */
+export async function fetchMarketByConditionId(conditionId: string): Promise<any | null> {
+  if (!conditionId) return null;
+  try {
+    const data = await getJson(
+      `${GAMMA_API}/markets?condition_id=${encodeURIComponent(conditionId)}&limit=25`
+    );
+    const list = Array.isArray(data) ? data : [];
+    return list.find((m: any) => conditionIdsMatch(m, conditionId)) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Official market record: condition id first, slug only if the condition id matches. */
+export async function fetchOfficialMarket(
+  conditionId: string,
+  marketSlug?: string | null
+): Promise<any | null> {
+  if (!conditionId) return null;
+  const byId = await fetchMarketByConditionId(conditionId);
+  if (byId) return byId;
+
+  if (marketSlug) {
+    const bySlug = await fetchMarketBySlug(marketSlug);
+    if (bySlug && conditionIdsMatch(bySlug, conditionId)) return bySlug;
   }
   return null;
 }
 
-/** Best-effort current mid price (0-1) for a market outcome via Gamma API. */
+/** True only when Polymarket has actually settled this market. */
+export function isOfficiallyResolved(market: any): boolean {
+  if (!market) return false;
+  const closed = market.closed === true || market.umaResolutionStatus === "resolved";
+  if (!closed) return false;
+  const { prices } = parseMarketOutcomes(market);
+  return prices.some((p) => Number.isFinite(p) && (p >= 0.95 || p <= 0.05));
+}
+
+export function resolutionFromOfficialMarket(
+  market: any,
+  outcomeIndex: number
+): { status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string } {
+  if (!isOfficiallyResolved(market)) return { status: "open" };
+  const price = outcomePriceFromMarket(market, outcomeIndex);
+  if (price == null) return { status: "open" };
+  const exitAt = market.closedTime || market.umaEndDate || new Date().toISOString();
+  if (price >= 0.95) return { status: "won", exit_price: 1, exit_at: exitAt };
+  if (price <= 0.05) return { status: "lost", exit_price: 0, exit_at: exitAt };
+  return { status: "open" };
+}
+
+/** Current mid price (0-1) for a market outcome via the official Gamma record only. */
 export async function fetchOutcomePrice(
   conditionId: string,
   outcomeIndex: number,
   marketSlug?: string | null,
-  marketTitle?: string | null
+  _marketTitle?: string | null
 ): Promise<number | null> {
-  if (!conditionId) return null;
-  try {
-    if (marketSlug) {
-      const bySlug = await fetchMarketBySlug(marketSlug);
-      if (bySlug?.conditionId?.toLowerCase() === conditionId.toLowerCase()) {
-        return outcomePriceFromMarket(bySlug, outcomeIndex);
-      }
-    }
-
-    const resolved = await resolvePolymarketLink({
-      conditionId,
-      marketTitle: marketTitle || undefined,
-      marketSlug: marketSlug || undefined,
-    });
-    if (resolved.slug) {
-      const bySlug = await fetchMarketBySlug(resolved.slug);
-      if (bySlug) return outcomePriceFromMarket(bySlug, outcomeIndex);
-    }
-  } catch {
-    /* fall through */
-  }
-  return null;
+  const market = await fetchOfficialMarket(conditionId, marketSlug);
+  if (!market) return null;
+  return outcomePriceFromMarket(market, outcomeIndex);
 }
 
 /** Positions with zero value are stale/resolved — exclude from open exposure totals. */
@@ -308,24 +359,12 @@ export async function fetchClobTokenId(
   conditionId: string,
   outcomeIndex: number,
   marketSlug?: string | null,
-  marketTitle?: string | null
+  _marketTitle?: string | null
 ): Promise<string | null> {
   try {
-    if (marketSlug) {
-      const bySlug = await fetchMarketBySlug(marketSlug);
-      const tokens = parseClobTokenIds(bySlug);
-      if (tokens[outcomeIndex]) return tokens[outcomeIndex];
-    }
-    const resolved = await resolvePolymarketLink({
-      conditionId,
-      marketTitle: marketTitle || undefined,
-      marketSlug: marketSlug || undefined,
-    });
-    if (resolved.slug) {
-      const bySlug = await fetchMarketBySlug(resolved.slug);
-      const tokens = parseClobTokenIds(bySlug);
-      if (tokens[outcomeIndex]) return tokens[outcomeIndex];
-    }
+    const market = await fetchOfficialMarket(conditionId, marketSlug);
+    const tokens = parseClobTokenIds(market);
+    if (tokens[outcomeIndex]) return tokens[outcomeIndex];
   } catch {
     /* fall through */
   }

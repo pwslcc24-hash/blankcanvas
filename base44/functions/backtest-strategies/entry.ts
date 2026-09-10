@@ -1,10 +1,9 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { isSkilledForConsensus } from "../../shared/consensus.ts";
-import { fetchOutcomePrice, resolveDelayedEntryPrice } from "../../shared/polymarket.ts";
+import { fetchOfficialMarket, resolveDelayedEntryPrice, resolutionFromOfficialMarket } from "../../shared/polymarket.ts";
 import {
   aggregateStats,
   findHistoricalClusters,
-  resolveTradeOutcome,
   simulatePaperTrade,
 } from "../../shared/paper-trading.ts";
 import { STRATEGY_PRESETS } from "../../shared/strategies.ts";
@@ -12,7 +11,7 @@ import { withRetry } from "../../shared/retry.ts";
 
 const ACTIVITY_PER_WALLET = 120;
 const WALLET_BATCH = 2;
-const MAX_GAMMA_LOOKUPS = 20;
+const MAX_GAMMA_LOOKUPS = 80;
 const MAX_CLOB_LOOKUPS = 25;
 
 function sleep(ms: number) {
@@ -97,29 +96,22 @@ function buildActivitiesByWallet(activities: any[]): Map<string, any[]> {
 async function resolveWithPriceFallback(
   conditionId: string,
   outcomeIndex: number,
-  entryMs: number,
-  allActivities: any[],
-  priceCache: Map<string, number | null>,
+  _entryMs: number,
+  _allActivities: any[],
+  marketCache: Map<string, any>,
   gammaBudget: { left: number },
-  now: Date,
+  _now: Date,
   marketSlug?: string | null,
-  marketTitle?: string | null
+  _marketTitle?: string | null
 ) {
-  const cacheKey = `${conditionId}|${outcomeIndex}|${marketSlug || ""}|${marketTitle || ""}`;
-  if (!priceCache.has(cacheKey) && gammaBudget.left > 0) {
+  const cacheKey = `${conditionId}|${marketSlug || ""}`;
+  if (!marketCache.has(cacheKey) && gammaBudget.left > 0) {
     gammaBudget.left -= 1;
-    priceCache.set(
-      cacheKey,
-      await fetchOutcomePrice(conditionId, outcomeIndex, marketSlug, marketTitle)
-    );
+    marketCache.set(cacheKey, await fetchOfficialMarket(conditionId, marketSlug));
     await sleep(100);
   }
-  const p = priceCache.get(cacheKey);
-  if (p != null && Number.isFinite(p) && (p >= 0.95 || p <= 0.05)) {
-    return resolveTradeOutcome(conditionId, outcomeIndex, entryMs, allActivities, p);
-  }
-
-  return resolveTradeOutcome(conditionId, outcomeIndex, entryMs, allActivities);
+  const market = marketCache.get(cacheKey);
+  return resolutionFromOfficialMarket(market, outcomeIndex);
 }
 
 async function refreshStatsFromDb(base44: any, now: Date) {
@@ -168,7 +160,7 @@ async function simulatePresets(
 ) {
   const allActivities = [...buys, ...redeems];
   const activitiesByWallet = buildActivitiesByWallet(allActivities);
-  const priceCache = new Map<string, number | null>();
+  const marketCache = new Map<string, any>();
   const gammaBudget = { left: MAX_GAMMA_LOOKUPS };
   const clobBudget = { left: MAX_CLOB_LOOKUPS };
   const summary: any[] = [];
@@ -190,7 +182,7 @@ async function simulatePresets(
         cluster.outcome_index ?? 0,
         entryMs,
         allActivities,
-        priceCache,
+        marketCache,
         gammaBudget,
         now,
         cluster.market_slug,

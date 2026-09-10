@@ -1,12 +1,17 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { alertMatchesStrategy, STRATEGY_PRESETS } from "../../shared/strategies.ts";
-import { isSkilledForConsensus } from "../../shared/consensus.ts";
-import { resolveTradeOutcome, simulatePaperTrade, applyPaperTradeResolution, refreshBacktestStrategyStats, resolveOpenTrade } from "../../shared/paper-trading.ts";
-import { resolveDelayedEntryPrice } from "../../shared/polymarket.ts";
-import { withRetry } from "../../shared/retry.ts";
+import {
+  simulatePaperTrade,
+  applyPaperTradeResolution,
+  refreshBacktestStrategyStats,
+  factCheckPaperTrade,
+  officialFieldsFromMarket,
+} from "../../shared/paper-trading.ts";
+import { fetchOfficialMarket, resolveDelayedEntryPrice, resolutionFromOfficialMarket } from "../../shared/polymarket.ts";
 
 const MAX_CREATES_PER_RUN = 80;
-const MAX_RESOLVES_PER_RUN = 150;
+const MAX_RESOLVES_PER_RUN = 80;
+const MAX_FACTCHECKS_PER_RUN = 80;
 
 async function enrichTradeFromActivity(base44: any, trade: any) {
   if (trade.market_slug) return trade;
@@ -29,26 +34,6 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchRedeems(base44: any, skilled: any[]): Promise<any[]> {
-  const redeems: any[] = [];
-  for (const wallet of skilled) {
-    try {
-      const rows = await withRetry(() =>
-        base44.entities.WalletActivity.filter(
-          { wallet_address: wallet.address, event_type: "REDEEM" },
-          "-occurred_at",
-          30
-        )
-      );
-      redeems.push(...rows);
-    } catch {
-      /* skip wallet on rate limit */
-    }
-    await sleep(250);
-  }
-  return redeems;
-}
-
 export default async function (req: Request): Promise<Response> {
   try {
     const base44 = createClientFromRequest(req);
@@ -57,18 +42,7 @@ export default async function (req: Request): Promise<Response> {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const now = new Date();
-    const since = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
-
-    const wallets = await base44.entities.TrackedWallet.filter({ is_active: true });
-    const skilled = wallets.filter(isSkilledForConsensus);
-
-    let redeems: any[] = [];
-    try {
-      redeems = await fetchRedeems(base44, skilled);
-    } catch {
-      redeems = [];
-    }
+    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
 
     const [alerts, forwardTrades, strategyRowsRaw] = await Promise.all([
       base44.entities.ConsensusAlert.filter({ status: "active" }),
@@ -102,8 +76,18 @@ export default async function (req: Request): Promise<Response> {
 
     const openTradesAll = await base44.entities.PaperTrade.filter({ status: "open" }, "-entry_at", MAX_RESOLVES_PER_RUN);
 
+    const marketCache = new Map<string, any>();
+    async function marketFor(conditionId: string, slug?: string | null) {
+      const key = `${conditionId}|${slug || ""}`;
+      if (!marketCache.has(key)) {
+        marketCache.set(key, await fetchOfficialMarket(conditionId, slug));
+      }
+      return marketCache.get(key);
+    }
+
     let entered = 0;
     let resolved = 0;
+    let corrected = 0;
     let skippedRateLimit = false;
 
     for (const preset of STRATEGY_PRESETS) {
@@ -138,14 +122,9 @@ export default async function (req: Request): Promise<Response> {
           total_usdc: alert.total_usdc,
         };
 
-        const entryMs =
-          new Date(cluster.last_buy_at).getTime() + preset.params.delaySec * 1000;
-        const resolution = resolveTradeOutcome(
-          cluster.condition_id,
-          cluster.outcome_index ?? 0,
-          entryMs,
-          redeems
-        );
+        const market = await marketFor(cluster.condition_id, cluster.market_slug);
+        const resolution = resolutionFromOfficialMarket(market, cluster.outcome_index ?? 0);
+        const officialFields = officialFieldsFromMarket(market, cluster.outcome_index ?? 0);
 
         let entryPrice: number | undefined;
         try {
@@ -159,7 +138,7 @@ export default async function (req: Request): Promise<Response> {
         }
 
         const trade = simulatePaperTrade(
-          cluster,
+          { ...cluster, ...officialFields },
           preset.strategy_id,
           preset.params,
           resolution,
@@ -193,7 +172,8 @@ export default async function (req: Request): Promise<Response> {
     for (const t of openTradesAll) {
       if (skippedRateLimit) break;
       const trade = await enrichTradeFromActivity(base44, t);
-      const resolution = await resolveOpenTrade(trade, redeems);
+      const market = await marketFor(trade.condition_id, trade.market_slug);
+      const resolution = resolutionFromOfficialMarket(market, trade.outcome_index ?? 0);
       if (resolution.status === "open") continue;
 
       const patch = applyPaperTradeResolution(trade, resolution);
@@ -202,11 +182,33 @@ export default async function (req: Request): Promise<Response> {
       try {
         await base44.entities.PaperTrade.update(t.id, {
           ...patch,
-          ...(trade.market_slug && !t.market_slug ? { market_slug: trade.market_slug } : {}),
+          ...officialFieldsFromMarket(market, trade.outcome_index ?? 0),
         });
         resolved += 1;
         if (t.is_backtest) backtestStrategyIds.push(t.strategy_id);
-        await sleep(100);
+        await sleep(80);
+      } catch (err: any) {
+        if (/rate limit/i.test(String(err?.message || err))) {
+          skippedRateLimit = true;
+          break;
+        }
+        throw err;
+      }
+    }
+
+    const settled = await base44.entities.PaperTrade.list("-exit_at", 200);
+    let factChecked = 0;
+    for (const t of settled) {
+      if (skippedRateLimit || factChecked >= MAX_FACTCHECKS_PER_RUN) break;
+      if (t.status !== "won" && t.status !== "lost") continue;
+      factChecked += 1;
+      const patch = await factCheckPaperTrade(t);
+      if (!patch) continue;
+      try {
+        await base44.entities.PaperTrade.update(t.id, patch);
+        corrected += 1;
+        if (t.is_backtest) backtestStrategyIds.push(t.strategy_id);
+        await sleep(80);
       } catch (err: any) {
         if (/rate limit/i.test(String(err?.message || err))) {
           skippedRateLimit = true;
@@ -228,6 +230,8 @@ export default async function (req: Request): Promise<Response> {
       alertsChecked: recentAlerts.length,
       entered,
       resolved,
+      corrected,
+      factChecked,
       partial: skippedRateLimit,
       message: skippedRateLimit
         ? "Partial run — hit rate limit, will continue next cron"

@@ -30,6 +30,7 @@ const STEP_LIMITS = {
   "sync-batch": 6,
   "score-batch": 3,
   "backtest-strategies": 50,
+  "fact-check-paper-trades": 4,
 };
 const DEFAULT_STEP_LIMIT = 1;
 

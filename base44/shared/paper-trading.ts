@@ -7,7 +7,11 @@ import {
   type ConsensusGroup,
   type ConsensusParticipant,
 } from "./consensus.ts";
-import { fetchOutcomePrice } from "./polymarket.ts";
+import {
+  fetchOfficialMarket,
+  parseMarketOutcomes,
+  resolutionFromOfficialMarket,
+} from "./polymarket.ts";
 import { computeWalletScoreAsOf } from "./scoring.ts";
 import type { StrategyParams } from "./strategies.ts";
 import { walletMatchesStrategy, walletMatchesStrategyFromScore } from "./strategies.ts";
@@ -251,72 +255,87 @@ export function buildParticipantsForSignal(
 }
 
 export function resolveTradeOutcome(
-  conditionId: string,
+  _conditionId: string,
   outcomeIndex: number,
-  entryMs: number,
-  activities: any[],
-  closedPrice?: number | null
+  _entryMs: number,
+  _activities: any[],
+  closedPrice?: number | null,
+  marketClosed?: boolean
 ): { status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string } {
-  const redeems = activities
-    .filter(
-      (a) =>
-        a.condition_id === conditionId &&
-        a.event_type === "REDEEM" &&
-        a.occurred_at &&
-        new Date(a.occurred_at).getTime() >= entryMs
-    )
-    .sort(
-      (a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime()
-    );
-
-  if (redeems.length) {
-    const matching = redeems.filter((r) => r.outcome_index === outcomeIndex);
-    if (matching.length) {
-      return {
-        status: "won",
-        exit_price: 1,
-        exit_at: matching[0].occurred_at,
-      };
-    }
-    const other = redeems.filter(
-      (r) => r.outcome_index != null && r.outcome_index !== outcomeIndex
-    );
-    if (other.length) {
-      return { status: "lost", exit_price: 0, exit_at: other[0].occurred_at };
-    }
+  // Only settle when the official market is closed. Live 95¢ favorites are not results.
+  if (!marketClosed) return { status: "open" };
+  if (closedPrice == null || !Number.isFinite(closedPrice)) return { status: "open" };
+  if (closedPrice >= 0.95) {
+    return { status: "won", exit_price: 1, exit_at: new Date().toISOString() };
   }
-
-  if (closedPrice != null && Number.isFinite(closedPrice)) {
-    if (closedPrice >= 0.95) {
-      return { status: "won", exit_price: 1, exit_at: new Date().toISOString() };
-    }
-    if (closedPrice <= 0.05) {
-      return { status: "lost", exit_price: 0, exit_at: new Date().toISOString() };
-    }
+  if (closedPrice <= 0.05) {
+    return { status: "lost", exit_price: 0, exit_at: new Date().toISOString() };
   }
-
   return { status: "open" };
 }
 
-/** Resolve an open paper trade using Gamma closed prices first, then redeems. */
+/** Resolve from Polymarket's official Gamma record only. No wallet-redeem guesses. */
 export async function resolveOpenTrade(
   trade: any,
-  activities: any[]
+  _activities: any[] = []
 ): Promise<{ status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string }> {
-  const entryMs = new Date(trade.entry_at).getTime();
-  const outcomeIndex = trade.outcome_index ?? 0;
+  const market = await fetchOfficialMarket(trade.condition_id, trade.market_slug);
+  return resolutionFromOfficialMarket(market, trade.outcome_index ?? 0);
+}
 
-  const price = await fetchOutcomePrice(
-    trade.condition_id,
-    outcomeIndex,
-    trade.market_slug,
-    trade.market_title
-  );
-  if (price != null && Number.isFinite(price) && (price >= 0.95 || price <= 0.05)) {
-    return resolveTradeOutcome(trade.condition_id, outcomeIndex, entryMs, activities, price);
+export function officialFieldsFromMarket(market: any, outcomeIndex: number) {
+  if (!market) return {};
+  const { labels } = parseMarketOutcomes(market);
+  const patch: Record<string, any> = {};
+  if (market.question) patch.market_title = market.question;
+  if (market.slug) patch.market_slug = market.slug;
+  if (labels[outcomeIndex]) patch.outcome = labels[outcomeIndex];
+  return patch;
+}
+
+/** Compare a stored paper trade to the official market and return a correction, or null. */
+export async function factCheckPaperTrade(trade: any): Promise<Record<string, any> | null> {
+  const market = await fetchOfficialMarket(trade.condition_id, trade.market_slug);
+  const official = resolutionFromOfficialMarket(market, trade.outcome_index ?? 0);
+  const fields = officialFieldsFromMarket(market, trade.outcome_index ?? 0);
+
+  if (!market) {
+    if (trade.status === "won" || trade.status === "lost") {
+      return {
+        status: "open",
+        exit_at: null,
+        exit_price: null,
+        pnl_usd: null,
+        ...fields,
+      };
+    }
+    return Object.keys(fields).length ? fields : null;
   }
 
-  return resolveTradeOutcome(trade.condition_id, outcomeIndex, entryMs, activities);
+  if (official.status === "open") {
+    if (trade.status === "won" || trade.status === "lost") {
+      return {
+        status: "open",
+        exit_at: null,
+        exit_price: null,
+        pnl_usd: null,
+        ...fields,
+      };
+    }
+    return Object.keys(fields).length ? fields : null;
+  }
+
+  const patch = applyPaperTradeResolution(trade, official);
+  if (!patch) return Object.keys(fields).length ? fields : null;
+
+  const same =
+    trade.status === patch.status &&
+    Number(trade.exit_price) === Number(patch.exit_price) &&
+    Number(trade.pnl_usd) === Number(patch.pnl_usd);
+  const titleSame = !fields.market_title || fields.market_title === trade.market_title;
+  const outcomeSame = !fields.outcome || fields.outcome === trade.outcome;
+  if (same && titleSame && outcomeSame) return null;
+  return { ...patch, ...fields };
 }
 
 export function applyPaperTradeResolution(
@@ -429,15 +448,3 @@ export function aggregateStats(trades: SimulatedTrade[]): StrategyStats {
   };
 }
 
-/** Batch-fetch closed prices for unique condition IDs (best-effort). */
-export async function fetchClosedPrices(
-  conditionIds: string[],
-  outcomeIndex: number
-): Promise<Map<string, number | null>> {
-  const map = new Map<string, number | null>();
-  const unique = [...new Set(conditionIds)].slice(0, 40);
-  for (const id of unique) {
-    map.set(id, await fetchOutcomePrice(id, outcomeIndex));
-  }
-  return map;
-}
