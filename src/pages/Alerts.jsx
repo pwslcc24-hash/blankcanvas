@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -63,6 +63,32 @@ export default function Alerts() {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [showExpired, setShowExpired] = useState(false);
+  const [marketUrls, setMarketUrls] = useState({});
+  const resolvingRef = useRef(new Set());
+
+  const resolveAlertUrl = useCallback(async (alert) => {
+    const sync = polymarketUrlFromSlug(alert.market_slug);
+    if (sync) {
+      setMarketUrls((prev) => (prev[alert.id] ? prev : { ...prev, [alert.id]: sync }));
+      return sync;
+    }
+    if (resolvingRef.current.has(alert.id)) return null;
+    resolvingRef.current.add(alert.id);
+    try {
+      const res = await base44.functions.invoke("resolve-polymarket-url", {
+        condition_id: alert.condition_id,
+        market_slug: alert.market_slug,
+      });
+      const url = res.data?.url;
+      if (url) {
+        setMarketUrls((prev) => ({ ...prev, [alert.id]: url }));
+        return url;
+      }
+    } catch {
+      /* best-effort */
+    }
+    return null;
+  }, []);
 
   const loadAlerts = useCallback(async () => {
     try {
@@ -82,6 +108,20 @@ export default function Alerts() {
   useEffect(() => {
     loadAlerts();
   }, [loadAlerts]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      for (const alert of alerts.slice(0, 40)) {
+        if (cancelled) break;
+        await resolveAlertUrl(alert);
+      }
+    };
+    if (alerts.length) run();
+    return () => {
+      cancelled = true;
+    };
+  }, [alerts, resolveAlertUrl]);
 
   const scanForConsensus = useCallback(async () => {
     setScanning(true);
@@ -233,14 +273,18 @@ export default function Alerts() {
                         <p className="font-medium truncate" title={alert.market_title}>
                           {alert.market_title || alert.condition_id?.slice(0, 12)}
                         </p>
-                        <a
-                          href={polymarketUrlFromSlug(alert.market_slug) || "https://polymarket.com"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
-                        >
-                          View market <ExternalLink className="w-3 h-3" />
-                        </a>
+                        {marketUrls[alert.id] || polymarketUrlFromSlug(alert.market_slug) ? (
+                          <a
+                            href={marketUrls[alert.id] || polymarketUrlFromSlug(alert.market_slug)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
+                          >
+                            View market <ExternalLink className="w-3 h-3" />
+                          </a>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Resolving link…</span>
+                        )}
                       </TableCell>
                       <TableCell>{alert.outcome || `#${alert.outcome_index}`}</TableCell>
                       <TableCell className="text-right font-medium">{alert.wallet_count}</TableCell>

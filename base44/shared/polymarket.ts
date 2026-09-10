@@ -123,103 +123,70 @@ const SPORTS_LEAGUES = new Set([
   "val",
 ]);
 
-const SPORTS_EVENT_SLUG =
-  /^((?:epl|mex|nfl|nba|mlb|nhl|ucl|mls|lal|bun|sea|fl1|ere|por|tur|spl|dfb|cof|uef|wta|atp|cs2|lol|val)-.+-\d{4}-\d{2}-\d{2})/;
+/** Browser URL for a market. Sports use the full market slug; other markets need the event slug. */
+export function buildPolymarketUrlFromSlug(
+  slug?: string | null,
+  eventSlug?: string | null
+): string | null {
+  const market = (slug || "").trim();
+  const event = (eventSlug || "").trim();
+  const sportsSource = market || event;
+  if (!sportsSource) return null;
 
-/** Build a browser URL from a Polymarket event or market slug. */
-export function buildPolymarketUrlFromSlug(slug?: string | null): string | null {
-  if (!slug) return null;
-  const clean = slug.trim();
-  if (!clean) return null;
-
-  const prefix = clean.split("-")[0]?.toLowerCase();
+  const prefix = sportsSource.split("-")[0]?.toLowerCase();
   if (prefix && SPORTS_LEAGUES.has(prefix)) {
-    const eventMatch = clean.match(SPORTS_EVENT_SLUG);
-    const eventSlug = eventMatch ? eventMatch[1] : clean;
-    return `https://polymarket.com/sports/${prefix}/${eventSlug}`;
+    return `https://polymarket.com/sports/${prefix}/${market || event}`;
   }
 
-  return `https://polymarket.com/event/${clean}`;
+  if (event) return `https://polymarket.com/event/${event}`;
+  return null;
 }
 
-/** Resolve slug + URL via Gamma search (title and/or condition id). */
+/** Official event + market URL. Never guesses from a title search. */
 export async function resolvePolymarketLink(opts: {
   marketTitle?: string;
   conditionId?: string;
   marketSlug?: string;
 }): Promise<{ url: string | null; slug: string | null; eventSlug: string | null }> {
-  const fromSlug = buildPolymarketUrlFromSlug(opts.marketSlug);
-  if (fromSlug) {
-    return { url: fromSlug, slug: opts.marketSlug || null, eventSlug: opts.marketSlug || null };
+  let marketSlug = opts.marketSlug || null;
+  if (opts.conditionId) {
+    const official = await fetchOfficialMarket(opts.conditionId, marketSlug);
+    if (official?.slug) marketSlug = official.slug;
   }
 
-  const query = opts.marketTitle || (opts.conditionId && !opts.conditionId.startsWith("0x") ? opts.conditionId : null);
-  if (!query && !opts.marketSlug) return { url: null, slug: null, eventSlug: null };
+  if (marketSlug) {
+    const gamma = await fetchMarketBySlug(marketSlug);
+    const event = Array.isArray(gamma?.events) ? gamma.events[0] : null;
+    const slug = gamma?.slug || marketSlug;
+    const eventSlug = event?.slug || null;
+    const url = buildPolymarketUrlFromSlug(slug, eventSlug);
+    if (url) return { url, slug, eventSlug };
+  }
 
-  try {
-    const params = new URLSearchParams({ q: query });
-    const data = await getJson(`${GAMMA_API}/public-search?${params.toString()}`);
-    const events = data?.events || [];
-
-    for (const event of events) {
-      const markets = event?.markets || [];
-      for (const market of markets) {
-        const cid = (market.conditionId || market.condition_id || "").toLowerCase();
-        if (opts.conditionId && cid === opts.conditionId.toLowerCase()) {
-          const url = buildPolymarketUrlFromGamma(event, market);
-          return {
-            url,
-            slug: market.slug || event.slug || null,
-            eventSlug: event.slug || null,
-          };
-        }
-      }
-    }
-
-    if (opts.marketTitle) {
-      const titleLower = opts.marketTitle.toLowerCase();
+  if (opts.conditionId) {
+    try {
+      const params = new URLSearchParams({ q: opts.conditionId });
+      const data = await getJson(`${GAMMA_API}/public-search?${params.toString()}`);
+      const events = data?.events || [];
       for (const event of events) {
         const markets = event?.markets || [];
-        const market = markets.find(
-          (m: any) =>
-            (m.question || "").toLowerCase() === titleLower ||
-            (m.question || "").toLowerCase().includes(titleLower) ||
-            titleLower.includes((m.question || "").toLowerCase())
-        );
-        if (market) {
-          const url = buildPolymarketUrlFromGamma(event, market);
-          return {
-            url,
-            slug: market.slug || event.slug || null,
-            eventSlug: event.slug || null,
-          };
-        }
-        if ((event.title || "").toLowerCase().includes(titleLower.split("?")[0].trim())) {
-          const url = buildPolymarketUrlFromGamma(event);
-          return { url, slug: event.slug || null, eventSlug: event.slug || null };
+        for (const market of markets) {
+          const cid = (market.conditionId || market.condition_id || "").toLowerCase();
+          if (cid === opts.conditionId.toLowerCase()) {
+            return {
+              url: buildPolymarketUrlFromSlug(market.slug, event.slug),
+              slug: market.slug || null,
+              eventSlug: event.slug || null,
+            };
+          }
         }
       }
+    } catch {
+      /* fall through */
     }
-
-    if (events[0]) {
-      const url = buildPolymarketUrlFromGamma(events[0]);
-      return {
-        url,
-        slug: events[0].slug || null,
-        eventSlug: events[0].slug || null,
-      };
-    }
-  } catch {
-    /* fall through */
   }
 
-  return { url: null, slug: null, eventSlug: null };
-}
-
-function buildPolymarketUrlFromGamma(event: any, market?: any): string | null {
-  if (event?.slug) return buildPolymarketUrlFromSlug(event.slug);
-  if (market?.slug) return buildPolymarketUrlFromSlug(market.slug);
-  return null;
+  return { url: null, slug: marketSlug, eventSlug: null };
 }
 
 /** Fetch a single market record by slug (reliable Gamma endpoint). */

@@ -25,32 +25,36 @@ const SPORTS_LEAGUES = new Set([
   "val",
 ]);
 
-const SPORTS_EVENT_SLUG =
-  /^((?:epl|mex|nfl|nba|mlb|nhl|ucl|mls|lal|bun|sea|fl1|ere|por|tur|spl|dfb|cof|uef|wta|atp|cs2|lol|val)-.+-\d{4}-\d{2}-\d{2})/;
+/** Sports: full market slug. Other markets need the event slug or a backend lookup. */
+export function polymarketUrlFromSlug(slug, eventSlug) {
+  const market = slug ? String(slug).trim() : "";
+  const event = eventSlug ? String(eventSlug).trim() : "";
+  const sportsSource = market || event;
+  if (!sportsSource) return null;
 
-export function polymarketUrlFromSlug(slug) {
-  if (!slug) return null;
-  const clean = String(slug).trim();
-  if (!clean) return null;
-
-  const prefix = clean.split("-")[0]?.toLowerCase();
+  const prefix = sportsSource.split("-")[0]?.toLowerCase();
   if (prefix && SPORTS_LEAGUES.has(prefix)) {
-    const eventMatch = clean.match(SPORTS_EVENT_SLUG);
-    const eventSlug = eventMatch ? eventMatch[1] : clean;
-    return `https://polymarket.com/sports/${prefix}/${eventSlug}`;
+    return `https://polymarket.com/sports/${prefix}/${market || event}`;
   }
 
-  return `https://polymarket.com/event/${clean}`;
+  if (event) return `https://polymarket.com/event/${event}`;
+  return null;
 }
 
 export function tradePolymarketUrlSync(trade, alerts, urlCache) {
   const key = trade.id || trade.trade_key;
   if (urlCache?.[key]) return urlCache[key];
 
-  if (trade.market_slug) return polymarketUrlFromSlug(trade.market_slug);
+  if (trade.market_slug) {
+    const url = polymarketUrlFromSlug(trade.market_slug);
+    if (url) return url;
+  }
 
   const alert = findAlertForTrade(trade, alerts);
-  if (alert?.market_slug) return polymarketUrlFromSlug(alert.market_slug);
+  if (alert?.market_slug) {
+    const url = polymarketUrlFromSlug(alert.market_slug);
+    if (url) return url;
+  }
 
   return null;
 }
@@ -68,7 +72,6 @@ export async function openTradePolymarketUrl(trade, alerts, urlCache, invokeReso
   const alert = findAlertForTrade(trade, alerts);
   const res = await invokeResolve({
     condition_id: trade.condition_id,
-    market_title: trade.market_title,
     market_slug: trade.market_slug || alert?.market_slug,
   });
   const url = res?.url || res?.data?.url;

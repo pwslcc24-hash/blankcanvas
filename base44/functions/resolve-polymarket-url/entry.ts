@@ -40,7 +40,7 @@ export default async function (req: Request): Promise<Response> {
       url: resolved.url,
       slug: resolved.slug,
       event_slug: resolved.eventSlug,
-      source: resolved.url ? "gamma_search" : "not_found",
+      source: resolved.url ? "official" : "not_found",
     });
   } catch (err: any) {
     return Response.json({ error: String(err?.message || err) }, { status: 500 });

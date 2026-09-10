@@ -295,9 +295,9 @@ export default function WalletDetail() {
                           </Badge>
                         </TableCell>
                         <TableCell className="max-w-xs truncate">
-                          {row.market_slug ? (
+                          {polymarketUrlFromSlug(row.market_slug) ? (
                             <a
-                              href={polymarketUrlFromSlug(row.market_slug) || "#"}
+                              href={polymarketUrlFromSlug(row.market_slug)}
                               target="_blank"
                               rel="noreferrer"
                               className="hover:underline"
@@ -344,9 +344,9 @@ export default function WalletDetail() {
                     {activePositions.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell className="max-w-xs truncate">
-                          {p.market_slug ? (
+                          {polymarketUrlFromSlug(p.market_slug) ? (
                             <a
-                              href={polymarketUrlFromSlug(p.market_slug) || "#"}
+                              href={polymarketUrlFromSlug(p.market_slug)}
                               target="_blank"
                               rel="noreferrer"
                               className="hover:underline"
