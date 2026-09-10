@@ -129,6 +129,13 @@ for (const name of functionNames) {
         payload = { minWallets: 2 };
       } else if (name === "backtest-strategies") {
         payload = { force: true };
+      } else if (name === "fact-check-paper-trades") {
+        const statuses = ["won", "lost", "open"];
+        payload = {
+          limit: 50,
+          offset: 0,
+          status: statuses[(iteration - 1) % statuses.length],
+        };
       }
 
       const res = await invokeWithRetry(name, payload);
@@ -141,6 +148,8 @@ for (const name of functionNames) {
       } else if (name === "sync-batch" || name === "score-batch") {
         const remaining = res.data?.remaining;
         if (!remaining || remaining <= 0) break;
+      } else if (name === "fact-check-paper-trades") {
+        // Rotate won/lost/open at offset 0 until the per-run cap.
       } else {
         break;
       }

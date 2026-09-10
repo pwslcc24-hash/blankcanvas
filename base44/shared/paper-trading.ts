@@ -300,16 +300,7 @@ export async function factCheckPaperTrade(trade: any): Promise<Record<string, an
   const fields = officialFieldsFromMarket(market, trade.outcome_index ?? 0);
 
   if (!market) {
-    if (trade.status === "won" || trade.status === "lost") {
-      return {
-        status: "open",
-        exit_at: null,
-        exit_price: null,
-        pnl_usd: null,
-        ...fields,
-      };
-    }
-    return Object.keys(fields).length ? fields : null;
+    return null;
   }
 
   if (official.status === "open") {

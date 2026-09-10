@@ -262,18 +262,41 @@ function conditionIdsMatch(market: any, conditionId: string): boolean {
   return !!conditionId && cid === conditionId.toLowerCase();
 }
 
-/** Official Gamma market for a condition id. Never uses fuzzy title search. */
+function clobMarketToGammaShape(m: any) {
+  const tokens = Array.isArray(m?.tokens) ? m.tokens : [];
+  return {
+    conditionId: m.condition_id || m.conditionId,
+    question: m.question,
+    slug: m.market_slug || m.slug,
+    closed: m.closed === true,
+    umaResolutionStatus: m.closed ? "resolved" : undefined,
+    closedTime: m.closed_time || m.end_date_iso || m.uma_end_date,
+    outcomes: tokens.map((t: any) => t.outcome),
+    outcomePrices: tokens.map((t: any) => t.price),
+    clobTokenIds: tokens.map((t: any) => String(t.token_id || "")),
+    tokens,
+  };
+}
+
+const officialMarketByCondition = new Map<string, any | null>();
+
+/** Official market for a condition id via CLOB. Gamma's condition_id filter is unreliable. */
 export async function fetchMarketByConditionId(conditionId: string): Promise<any | null> {
   if (!conditionId) return null;
+  const key = conditionId.toLowerCase();
+  if (officialMarketByCondition.has(key)) return officialMarketByCondition.get(key) ?? null;
   try {
-    const data = await getJson(
-      `${GAMMA_API}/markets?condition_id=${encodeURIComponent(conditionId)}&limit=25`
-    );
-    const list = Array.isArray(data) ? data : [];
-    return list.find((m: any) => conditionIdsMatch(m, conditionId)) || null;
+    const data = await getJson(`${CLOB_API}/markets/${encodeURIComponent(conditionId)}`);
+    if (data?.condition_id || data?.question) {
+      const shaped = clobMarketToGammaShape(data);
+      officialMarketByCondition.set(key, shaped);
+      return shaped;
+    }
   } catch {
-    return null;
+    /* fall through */
   }
+  officialMarketByCondition.set(key, null);
+  return null;
 }
 
 /** Official market record: condition id first, slug only if the condition id matches. */
@@ -292,25 +315,42 @@ export async function fetchOfficialMarket(
   return null;
 }
 
+function clobWinnerForIndex(market: any, outcomeIndex: number): boolean | null {
+  const tokens = Array.isArray(market?.tokens) ? market.tokens : [];
+  const token = tokens[outcomeIndex];
+  if (!token || token.winner == null) return null;
+  return token.winner === true;
+}
+
 /** True only when Polymarket has actually settled this market. */
 export function isOfficiallyResolved(market: any): boolean {
   if (!market) return false;
+  const tokens = Array.isArray(market.tokens) ? market.tokens : [];
+  if (tokens.some((t: any) => t?.winner === true)) return true;
   const closed = market.closed === true || market.umaResolutionStatus === "resolved";
   if (!closed) return false;
   const { prices } = parseMarketOutcomes(market);
-  return prices.some((p) => Number.isFinite(p) && (p >= 0.95 || p <= 0.05));
+  const hasWinnerPrice = prices.some((p) => Number.isFinite(p) && p >= 0.99);
+  const hasLoserPrice = prices.some((p) => Number.isFinite(p) && p <= 0.01);
+  return hasWinnerPrice && hasLoserPrice;
 }
 
 export function resolutionFromOfficialMarket(
   market: any,
   outcomeIndex: number
 ): { status: "open" | "won" | "lost"; exit_price?: number; exit_at?: string } {
+  if (!market) return { status: "open" };
+  const exitAt = market.closedTime || market.umaEndDate || new Date().toISOString();
+  const winner = clobWinnerForIndex(market, outcomeIndex);
+  if (winner === true) return { status: "won", exit_price: 1, exit_at: exitAt };
+  if (winner === false && isOfficiallyResolved(market)) {
+    return { status: "lost", exit_price: 0, exit_at: exitAt };
+  }
   if (!isOfficiallyResolved(market)) return { status: "open" };
   const price = outcomePriceFromMarket(market, outcomeIndex);
   if (price == null) return { status: "open" };
-  const exitAt = market.closedTime || market.umaEndDate || new Date().toISOString();
-  if (price >= 0.95) return { status: "won", exit_price: 1, exit_at: exitAt };
-  if (price <= 0.05) return { status: "lost", exit_price: 0, exit_at: exitAt };
+  if (price >= 0.99) return { status: "won", exit_price: 1, exit_at: exitAt };
+  if (price <= 0.01) return { status: "lost", exit_price: 0, exit_at: exitAt };
   return { status: "open" };
 }
 
