@@ -1,6 +1,6 @@
-// Shared helpers for talking to Polymarket's public Data API
-// (https://data-api.polymarket.com). No API key required — these are
-// read-only, publicly documented endpoints.
+// Shared helpers for Polymarket's public Data API v2
+// (https://data-api.polymarket.com/v2). No API key required.
+// v1 routes were retired and now return 410.
 
 export const DATA_API = "https://data-api.polymarket.com";
 export const CLOB_API = "https://clob.polymarket.com";
@@ -37,7 +37,55 @@ async function getJson(url: string, attempt = 1): Promise<any> {
 
 function unwrapList(data: any): any[] {
   if (Array.isArray(data)) return data;
-  return data?.data || data?.leaderboard || data?.entries || [];
+  const inner = data?.data ?? data?.leaderboard ?? data?.entries;
+  if (Array.isArray(inner)) return inner;
+  if (inner && typeof inner === "object") return [inner];
+  return [];
+}
+
+function normalizeActivity(a: any) {
+  return {
+    type: a.type,
+    side: a.side,
+    title: a.title,
+    slug: a.slug,
+    conditionId: a.conditionId || a.condition_id,
+    outcome: a.outcome,
+    outcomeIndex: a.outcomeIndex ?? a.outcome_index,
+    price: a.price,
+    size: a.size,
+    usdcSize: a.usdcSize ?? a.usdc_size,
+    timestamp: a.timestamp,
+    transactionHash: a.transactionHash || a.transaction_hash,
+  };
+}
+
+function normalizePosition(p: any) {
+  return {
+    conditionId: p.conditionId || p.condition_id,
+    title: p.title,
+    slug: p.slug,
+    outcome: p.outcome,
+    outcomeIndex: p.outcomeIndex ?? p.outcome_index,
+    size: p.size ?? p.current_size,
+    avgPrice: p.avgPrice ?? p.avg_price,
+    curPrice: p.curPrice ?? p.current_price,
+    initialValue: p.initialValue ?? p.total_cost_usdc ?? p.entry_cost_usdc,
+    currentValue: p.currentValue ?? p.current_value,
+    cashPnl: p.cashPnl ?? p.unrealized_pnl,
+    percentPnl: p.percentPnl ?? p.percent_pnl,
+    redeemable: p.redeemable === true,
+  };
+}
+
+function normalizeLeaderboard(entry: any) {
+  if (!entry) return null;
+  return {
+    proxyWallet: entry.proxyWallet || entry.user_id || entry.wallet,
+    userName: entry.userName || entry.user_name,
+    pnl: entry.pnl,
+    vol: entry.vol ?? entry.volume,
+  };
 }
 
 /** Polymarket's own all-time (or filtered) leaderboard entry for a single wallet, if ranked. */
@@ -48,9 +96,9 @@ export async function fetchLeaderboardStats(address: string): Promise<any | null
     orderBy: "PNL",
     limit: "1",
   });
-  const data = await getJson(`${DATA_API}/v1/leaderboard?${params.toString()}`);
+  const data = await getJson(`${DATA_API}/v2/leaderboard?${params.toString()}`);
   const entries = unwrapList(data);
-  return entries[0] || null;
+  return normalizeLeaderboard(entries[0]);
 }
 
 /** Raw leaderboard page for discovery (top wallets by PNL or VOL). */
@@ -66,10 +114,9 @@ export async function fetchLeaderboardPage(opts: {
     timePeriod: opts.timePeriod || "ALL",
     orderBy: opts.orderBy || "PNL",
     limit: String(opts.limit || 25),
-    offset: String(opts.offset || 0),
   });
-  const data = await getJson(`${DATA_API}/v1/leaderboard?${params.toString()}`);
-  return unwrapList(data);
+  const data = await getJson(`${DATA_API}/v2/leaderboard?${params.toString()}`);
+  return unwrapList(data).map(normalizeLeaderboard);
 }
 
 /** Recent on-chain activity for a wallet (trades, splits, merges, redeems, rewards, conversions). */
@@ -77,11 +124,11 @@ export async function fetchActivity(address: string, limit = 500): Promise<any[]
   const params = new URLSearchParams({
     user: address,
     limit: String(Math.min(limit, 500)),
-    sortBy: "TIMESTAMP",
-    sortDirection: "DESC",
+    sort_by: "TIMESTAMP",
+    sort_direction: "DESC",
   });
-  const data = await getJson(`${DATA_API}/activity?${params.toString()}`);
-  return unwrapList(data);
+  const data = await getJson(`${DATA_API}/v2/activity?${params.toString()}`);
+  return unwrapList(data).map(normalizeActivity);
 }
 
 /** Currently open positions for a wallet. */
@@ -90,8 +137,8 @@ export async function fetchPositions(address: string, limit = 500): Promise<any[
     user: address,
     limit: String(Math.min(limit, 500)),
   });
-  const data = await getJson(`${DATA_API}/positions?${params.toString()}`);
-  return unwrapList(data);
+  const data = await getJson(`${DATA_API}/v2/positions?${params.toString()}`);
+  return unwrapList(data).map(normalizePosition);
 }
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
