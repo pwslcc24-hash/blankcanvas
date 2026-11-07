@@ -1,29 +1,9 @@
-// Skill-scoring engine for tracked wallets (Stage 2 of the smart-wallet
-// consensus plan).
+// Letter grades for tracked wallets.
 //
-// Works entirely from synced WalletActivity + WalletPosition rows. A market is
-// "closed" when the wallet has no remaining open position in it; realized
-// profit is cash-out (sells + merges + redeems) minus cash-in (buys + splits).
-//
-// Deliberate design choices, per the research this project is based on:
-//  - Return on capital matters more than raw dollar profit.
-//  - One giant win should NOT produce a high score (profit concentration
-//    penalty), because lottery winners aren't skill.
-//  - Out-of-sample (OOS) metrics only count markets first traded AFTER the
-//    wallet was added to tracking — the only honest forward-test signal.
-//  - Scores from thin data are flagged "insufficient"/"low" confidence; the
-//    synced history is capped by the Data API (500 most recent events per
-//    sync), so early scores are provisional until history accumulates.
-
-interface MarketAggregate {
-  conditionId: string;
-  inflowUsd: number; // buys + splits (cash deployed)
-  outflowUsd: number; // sells + merges + redeems (cash recovered)
-  firstActivityAt: number; // ms epoch
-  lastActivityAt: number; // ms epoch
-  buyCostUsd: number; // TRADE/BUY only — used to derive the market-implied entry price
-  buyShares: number; // TRADE/BUY only
-}
+// A grade counts only bets placed after we started watching the wallet, and
+// only once Polymarket has officially settled that bet. Selling early does not
+// count. The wallet has to beat the price it paid. Until 30 of those settled
+// bets exist, the grade stays blank so an old lucky record cannot trigger a play.
 
 export interface WalletScoreResult {
   score: number;
@@ -44,8 +24,16 @@ export interface WalletScoreResult {
   calibrated_market_count: number;
 }
 
-const CASH_IN_TYPES = new Set(["SPLIT"]);
-const CASH_OUT_TYPES = new Set(["MERGE", "REDEEM"]);
+/** Finished watched bets required before a letter grade is assigned. */
+export const MIN_WATCHED_MARKETS = 30;
+
+interface SideBook {
+  buyCostUsd: number;
+  buyShares: number;
+  firstBuyAt: number;
+  lastBuyAt: number;
+  redeemed: boolean;
+}
 
 function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
@@ -56,211 +44,191 @@ function round(x: number, places = 4): number {
   return Math.round(x * f) / f;
 }
 
+function sideKey(conditionId: string, outcomeIndex: number): string {
+  return `${conditionId}|${outcomeIndex}`;
+}
+
+function emptyScore(): WalletScoreResult {
+  return {
+    score: 0,
+    grade: "",
+    confidence: "insufficient",
+    closed_market_count: 0,
+    win_rate: 0,
+    realized_profit_usd: 0,
+    buy_volume_usd: 0,
+    return_on_capital: 0,
+    profit_concentration: 1,
+    distinct_markets: 0,
+    activity_span_days: 0,
+    oos_closed_market_count: 0,
+    oos_realized_profit_usd: 0,
+    oos_win_rate: 0,
+    calibration_edge: 0,
+    calibrated_market_count: 0,
+  };
+}
+
+/** Official win/loss for the side this wallet bought. Early sales stay unknown. */
+export function officialSideResult(
+  position: any | null,
+  redeemed: boolean
+): "won" | "lost" | "open" | "unknown" {
+  if (position && !position.redeemable) return "open";
+  if (position && position.redeemable) {
+    const price = Number(position.current_price);
+    if (Number.isFinite(price) && price >= 0.99) return "won";
+    if (Number.isFinite(price) && price <= 0.01) return "lost";
+    return "open";
+  }
+  if (redeemed) return "won";
+  return "unknown";
+}
+
 export function computeWalletScore(
   wallet: any,
   activities: any[],
   positions: any[]
 ): WalletScoreResult {
-  // A position row that has resolved (redeemable === true) is a market the
-  // wallet has already won or lost — nobody bothers to claim a worthless
-  // token, so losses in particular pile up here unredeemed forever. Treating
-  // every position row as "still open" (the old behavior) silently dropped
-  // those confirmed losses from the score while wins, which do get redeemed
-  // and disappear from this table, still counted. Only genuinely unresolved
-  // positions (redeemable === false) should be excluded as "open".
-  const openConditions = new Set<string>();
-  const resolvedUnclaimedValueByCondition = new Map<string, number>();
-  for (const p of positions) {
-    if (!p.condition_id) continue;
-    if (p.redeemable) {
-      resolvedUnclaimedValueByCondition.set(
-        p.condition_id,
-        (resolvedUnclaimedValueByCondition.get(p.condition_id) || 0) +
-          Number(p.current_value_usd || 0)
-      );
-    } else {
-      openConditions.add(p.condition_id);
-    }
-  }
-
-  const markets = new Map<string, MarketAggregate>();
-  let minTs = Infinity;
-  let maxTs = -Infinity;
-
-  for (const a of activities) {
-    const conditionId = a.condition_id;
-    const ts = a.occurred_at ? new Date(a.occurred_at).getTime() : NaN;
-    if (Number.isFinite(ts)) {
-      minTs = Math.min(minTs, ts);
-      maxTs = Math.max(maxTs, ts);
-    }
-    if (!conditionId) continue;
-    // REWARD/CONVERSION are not directional trading decisions — exclude them
-    // from per-market profit so liquidity rewards don't inflate "skill".
-    if (a.event_type === "REWARD" || a.event_type === "CONVERSION") continue;
-
-    let agg = markets.get(conditionId);
-    if (!agg) {
-      agg = {
-        conditionId,
-        inflowUsd: 0,
-        outflowUsd: 0,
-        firstActivityAt: Infinity,
-        lastActivityAt: -Infinity,
-        buyCostUsd: 0,
-        buyShares: 0,
-      };
-      markets.set(conditionId, agg);
-    }
-    if (Number.isFinite(ts)) {
-      agg.firstActivityAt = Math.min(agg.firstActivityAt, ts);
-      agg.lastActivityAt = Math.max(agg.lastActivityAt, ts);
-    }
-
-    const usdc = Number(a.usdc_size || 0);
-    if (a.event_type === "TRADE") {
-      if (a.side === "BUY") {
-        agg.inflowUsd += usdc;
-        // Only direct market buys carry a real "price paid" — splits mint
-        // both outcome tokens for $1 combined and aren't a directional bet,
-        // so they're excluded from the implied-probability calculation below.
-        agg.buyCostUsd += usdc;
-        agg.buyShares += Number(a.size || 0);
-      } else if (a.side === "SELL") agg.outflowUsd += usdc;
-    } else if (CASH_IN_TYPES.has(a.event_type)) {
-      agg.inflowUsd += usdc;
-    } else if (CASH_OUT_TYPES.has(a.event_type)) {
-      agg.outflowUsd += usdc;
-    }
-  }
-
-  const trackedSinceMs = wallet.created_date
+  const trackedSinceMs = wallet?.created_date
     ? new Date(wallet.created_date).getTime()
     : Infinity;
+
+  const sides = new Map<string, SideBook>();
+  const positionsBySide = new Map<string, any>();
+
+  for (const p of positions || []) {
+    if (!p?.condition_id || p.outcome_index == null) continue;
+    positionsBySide.set(sideKey(p.condition_id, Number(p.outcome_index)), p);
+  }
+
+  for (const a of activities || []) {
+    if (!a?.condition_id || a.outcome_index == null) continue;
+    const key = sideKey(a.condition_id, Number(a.outcome_index));
+    const ts = a.occurred_at ? new Date(a.occurred_at).getTime() : NaN;
+
+    if (a.event_type === "REDEEM") {
+      const book = sides.get(key) || {
+        buyCostUsd: 0,
+        buyShares: 0,
+        firstBuyAt: Infinity,
+        lastBuyAt: -Infinity,
+        redeemed: false,
+      };
+      book.redeemed = true;
+      sides.set(key, book);
+      continue;
+    }
+
+    if (a.event_type !== "TRADE" || a.side !== "BUY") continue;
+
+    const book = sides.get(key) || {
+      buyCostUsd: 0,
+      buyShares: 0,
+      firstBuyAt: Infinity,
+      lastBuyAt: -Infinity,
+      redeemed: false,
+    };
+    book.buyCostUsd += Number(a.usdc_size || 0);
+    book.buyShares += Number(a.size || 0);
+    if (Number.isFinite(ts)) {
+      book.firstBuyAt = Math.min(book.firstBuyAt, ts);
+      book.lastBuyAt = Math.max(book.lastBuyAt, ts);
+    }
+    sides.set(key, book);
+  }
 
   let closedCount = 0;
   let wins = 0;
   let totalProfit = 0;
   let buyVolume = 0;
   let maxMarketProfit = 0;
-
-  let oosClosedCount = 0;
-  let oosWins = 0;
-  let oosProfit = 0;
-
-  // Calibration: was this wallet actually right more often than the price it
-  // paid implied? Buying at $0.90 and winning 90% of the time is the market
-  // being right, not skill — real edge is winning MORE than your own average
-  // entry price implied. Summing (outcome - impliedProbability) across
-  // markets and averaging gives that edge directly (a Brier-style residual).
   let calibrationSum = 0;
   let calibratedMarketCount = 0;
+  let minTs = Infinity;
+  let maxTs = -Infinity;
 
-  for (const agg of markets.values()) {
-    // Only markets the wallet actually deployed capital into and fully exited.
-    if (openConditions.has(agg.conditionId) || agg.inflowUsd <= 0) continue;
+  for (const [key, book] of sides) {
+    if (book.buyCostUsd <= 0 || book.buyShares <= 0) continue;
+    if (!Number.isFinite(book.firstBuyAt) || book.firstBuyAt < trackedSinceMs) continue;
 
-    // Resolved-but-unredeemed value (see resolvedUnclaimedValueByCondition
-    // above) is real cash the wallet is entitled to (zero on a loss, full
-    // payout on a win) — count it as if it had been redeemed.
-    const effectiveOutflow =
-      agg.outflowUsd + (resolvedUnclaimedValueByCondition.get(agg.conditionId) || 0);
-    const profit = effectiveOutflow - agg.inflowUsd;
+    const result = officialSideResult(positionsBySide.get(key) || null, book.redeemed);
+    if (result !== "won" && result !== "lost") continue;
+
+    const won = result === "won";
+    const profit = (won ? book.buyShares : 0) - book.buyCostUsd;
     closedCount += 1;
     totalProfit += profit;
-    buyVolume += agg.inflowUsd;
-    const won = profit > 0.01;
+    buyVolume += book.buyCostUsd;
     if (won) {
       wins += 1;
       maxMarketProfit = Math.max(maxMarketProfit, profit);
     }
-
-    if (agg.buyShares > 0) {
-      const impliedProb = clamp01(agg.buyCostUsd / agg.buyShares);
-      calibrationSum += (won ? 1 : 0) - impliedProb;
-      calibratedMarketCount += 1;
-    }
-
-    if (agg.firstActivityAt >= trackedSinceMs) {
-      oosClosedCount += 1;
-      oosProfit += profit;
-      if (profit > 0.01) oosWins += 1;
-    }
+    const implied = clamp01(book.buyCostUsd / book.buyShares);
+    calibrationSum += (won ? 1 : 0) - implied;
+    calibratedMarketCount += 1;
+    minTs = Math.min(minTs, book.firstBuyAt);
+    if (Number.isFinite(book.lastBuyAt)) maxTs = Math.max(maxTs, book.lastBuyAt);
   }
 
-  const calibrationEdge =
-    calibratedMarketCount > 0 ? calibrationSum / calibratedMarketCount : 0;
-
+  const calibrationEdge = calibratedMarketCount > 0 ? calibrationSum / calibratedMarketCount : 0;
   const winRate = closedCount > 0 ? wins / closedCount : 0;
   const roc = buyVolume > 0 ? totalProfit / buyVolume : 0;
-  const concentration =
-    totalProfit > 0 ? clamp01(maxMarketProfit / totalProfit) : 1;
+  const concentration = totalProfit > 0 ? clamp01(maxMarketProfit / totalProfit) : 1;
   const spanDays =
     Number.isFinite(minTs) && Number.isFinite(maxTs) && maxTs > minTs
       ? (maxTs - minTs) / 86_400_000
       : 0;
 
-  let confidence: WalletScoreResult["confidence"];
-  if (closedCount < 10) confidence = "insufficient";
-  else if (closedCount < 30) confidence = "low";
-  else if (closedCount < 75) confidence = "medium";
-  else confidence = "high";
+  const base = emptyScore();
+  base.closed_market_count = closedCount;
+  base.win_rate = round(winRate);
+  base.realized_profit_usd = round(totalProfit, 2);
+  base.buy_volume_usd = round(buyVolume, 2);
+  base.return_on_capital = round(roc);
+  base.profit_concentration = round(concentration);
+  base.distinct_markets = closedCount;
+  base.activity_span_days = round(spanDays, 1);
+  base.oos_closed_market_count = closedCount;
+  base.oos_realized_profit_usd = round(totalProfit, 2);
+  base.oos_win_rate = round(winRate);
+  base.calibration_edge = round(calibrationEdge);
+  base.calibrated_market_count = calibratedMarketCount;
 
-  let score = 0;
-  if (closedCount > 0) {
-    const sampleComponent = clamp01(closedCount / 50) * 15;
-    // Centered on 0 edge = market-implied odds, no skill. +-0.15 average
-    // edge per market is a large, sustained edge for a prediction market.
-    const calibrationComponent =
-      calibratedMarketCount > 0
-        ? clamp01((calibrationEdge + 0.15) / 0.3) * 25
-        : 0;
-    const rocComponent = clamp01((roc + 0.1) / 0.4) * 25;
-    const concentrationComponent =
-      totalProfit > 0 ? (1 - concentration) * 20 : 0;
-    const diversityComponent =
-      clamp01(markets.size / 40) * 10 + clamp01(spanDays / 60) * 5;
-    score =
-      sampleComponent +
-      calibrationComponent +
-      rocComponent +
-      concentrationComponent +
-      diversityComponent;
-  }
-  score = Math.round(score * 10) / 10;
+  if (closedCount < MIN_WATCHED_MARKETS) return base;
 
-  const grade =
-    score >= 80 ? "A" : score >= 65 ? "B" : score >= 50 ? "C" : score >= 35 ? "D" : "F";
+  const sampleComponent = clamp01(closedCount / 50) * 15;
+  const calibrationComponent = clamp01((calibrationEdge + 0.15) / 0.3) * 25;
+  const rocComponent = clamp01((roc + 0.1) / 0.4) * 25;
+  const concentrationComponent = totalProfit > 0 ? (1 - concentration) * 20 : 0;
+  const diversityComponent = clamp01(closedCount / 40) * 10 + clamp01(spanDays / 60) * 5;
+  const score =
+    Math.round(
+      (sampleComponent + calibrationComponent + rocComponent + concentrationComponent + diversityComponent) * 10
+    ) / 10;
 
-  return {
-    score,
-    grade,
-    confidence,
-    closed_market_count: closedCount,
-    win_rate: round(winRate),
-    realized_profit_usd: round(totalProfit, 2),
-    buy_volume_usd: round(buyVolume, 2),
-    return_on_capital: round(roc),
-    profit_concentration: round(concentration),
-    distinct_markets: markets.size,
-    activity_span_days: round(spanDays, 1),
-    oos_closed_market_count: oosClosedCount,
-    oos_realized_profit_usd: round(oosProfit, 2),
-    oos_win_rate: round(oosClosedCount > 0 ? oosWins / oosClosedCount : 0),
-    calibration_edge: round(calibrationEdge),
-    calibrated_market_count: calibratedMarketCount,
-  };
+  let confidence: WalletScoreResult["confidence"] = "medium";
+  if (closedCount >= 75) confidence = "high";
+
+  const grade = score >= 80 ? "A" : score >= 65 ? "B" : score >= 50 ? "C" : score >= 35 ? "D" : "F";
+
+  return { ...base, score, grade, confidence };
 }
 
-/** Score using only activity that occurred before asOfMs (honest backtest filter). */
+/**
+ * Point-in-time grade for backtests. Without the position snapshot from that
+ * day we cannot see official losses, so the grade stays blank. Old backtests
+ * no longer invent an A from a wallet's past.
+ */
 export function computeWalletScoreAsOf(
   wallet: any,
   activities: any[],
   asOfMs: number
 ): WalletScoreResult {
-  const filtered = activities.filter((a) => {
+  const filtered = (activities || []).filter((a) => {
     const t = a.occurred_at ? new Date(a.occurred_at).getTime() : NaN;
     return Number.isFinite(t) && t < asOfMs;
   });
-  return computeWalletScore(wallet, filtered, []);
+  const scored = computeWalletScore(wallet, filtered, []);
+  return { ...scored, score: 0, grade: "", confidence: "insufficient" };
 }

@@ -1,7 +1,7 @@
 {
   "name": "WalletScore",
   "type": "object",
-  "description": "Latest skill-score snapshot for a tracked wallet, computed from its synced activity. One row per wallet, replaced on each scoring run. Out-of-sample (OOS) metrics only count activity after the wallet was first tracked, which is the honest forward-test measure.",
+  "description": "Latest skill-score snapshot for a tracked wallet. The letter grade uses only bets placed after tracking started and officially settled by Polymarket. Blank until 30 of those bets exist.",
   "properties": {
     "wallet_address": {
       "type": "string",

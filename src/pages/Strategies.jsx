@@ -287,10 +287,16 @@ function confidenceScore(allStats, liveStats) {
   return { score: clamped, label, className, advice };
 }
 
+const STRATEGY_RESET_AT = "2026-11-07T05:00:00.000Z";
+
+function isFreshLiveTrade(trade) {
+  if (!trade || trade.is_backtest) return false;
+  const at = trade.entry_at ? new Date(trade.entry_at).getTime() : 0;
+  return at >= new Date(STRATEGY_RESET_AT).getTime();
+}
+
 function allStatsForStrategy(strategy, liveStatsByStrategy) {
-  const past = statsFromStrategyEntity(strategy);
-  const live = liveStatsByStrategy.get(strategy?.strategy_id) || statsFromTrades([]);
-  return combineStats(past, live);
+  return liveStatsByStrategy.get(strategy?.strategy_id) || statsFromTrades([]);
 }
 
 function allStatsForSelected(backtestTrades, liveTrades) {
@@ -302,12 +308,12 @@ function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakeP
     <Card className="border-2 border-primary/20">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Performance at a glance</CardTitle>
-        <CardDescription>Past + live deduped by signal — all-time % avoids double-counting</CardDescription>
+        <CardDescription>Only practice bets opened after the fresh start. Old tests are not included.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="rounded-lg border-2 border-primary/40 p-3 bg-primary/[0.04] lg:col-span-1 order-first">
-            <p className="text-[11px] uppercase tracking-wide font-medium text-foreground">All time ★</p>
+            <p className="text-[11px] uppercase tracking-wide font-medium text-foreground">Fresh start</p>
             <p className={cn("text-2xl font-bold mt-1", (allStats.roi ?? 0) >= 0 ? "text-emerald-600" : "text-red-600")}>
               {allStats.resolved > 0 ? pct(allStats.roi) : "—"}
             </p>
@@ -320,7 +326,7 @@ function PerformanceSummary({ pastStats, liveStats, allStats, confidence, stakeP
             {allRange && (
               <p className="text-[10px] text-muted-foreground mt-1">Trades from {formatRange(allRange)}</p>
             )}
-            <p className="text-[10px] text-muted-foreground mt-1">Use this to pick a strategy</p>
+            <p className="text-[10px] text-muted-foreground mt-1">The only number that counts</p>
           </div>
           <div className="rounded-lg border border-blue-500/30 bg-blue-500/[0.04] p-3">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Past test</p>
@@ -803,7 +809,9 @@ export default function Strategies() {
       const [s, a, live, pastEarliest] = await Promise.all([
         base44.entities.PaperStrategy.list("-roi", 50),
         base44.entities.ConsensusAlert.list("-detected_at", 300),
-        base44.entities.PaperTrade.filter({ is_backtest: false }, "-entry_at", 800),
+        base44.entities.PaperTrade.filter({ is_backtest: false }, "-entry_at", 800).then((rows) =>
+          rows.filter(isFreshLiveTrade)
+        ),
         base44.entities.PaperTrade.filter({ is_backtest: true }, "entry_at", 1),
       ]);
       setStrategies(s);
@@ -832,7 +840,7 @@ export default function Strategies() {
       "-entry_at",
       500
     );
-    setTrades(t);
+    setTrades(t.filter(isFreshLiveTrade));
   }, []);
 
   useEffect(() => {
@@ -974,12 +982,9 @@ export default function Strategies() {
   const selectedTrades = useMemo(() => trades, [trades]);
   const backtestTrades = useMemo(() => selectedTrades.filter((t) => t.is_backtest), [selectedTrades]);
   const liveTrades = useMemo(() => selectedTrades.filter((t) => !t.is_backtest), [selectedTrades]);
-  const backtestStats = useMemo(() => statsFromStrategyEntity(selected), [selected]);
+  const backtestStats = useMemo(() => statsFromTrades([]), []);
   const liveStats = useMemo(() => statsFromTrades(liveTrades), [liveTrades]);
-  const allStats = useMemo(
-    () => allStatsForSelected(backtestTrades, liveTrades),
-    [backtestTrades, liveTrades]
-  );
+  const allStats = liveStats;
   const confidence = useMemo(
     () => confidenceScore(allStats, liveStats),
     [allStats, liveStats]
@@ -1061,11 +1066,10 @@ export default function Strategies() {
             Strategy lab
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Fake money only · All-time % dedupes past + live on the same signal
-            {globalDataRange && <> · Trades from {formatRange(globalDataRange)}</>}
+            Practice money only. Old tests are retired. This record starts November 6, 2026.
           </p>
           <p className="text-muted-foreground text-xs mt-1">
-            Live paper only started ~2 days ago; past replay is limited to synced wallet history (grows toward 30 days)
+            One play: 3 wallets with a new A or B, same side, within 6 hours, price barely moved. Real money waits until that play is ahead on 30 different finished markets.
           </p>
         </div>
         <Button onClick={runBacktest} disabled={backtesting}>
@@ -1085,7 +1089,7 @@ export default function Strategies() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <Trophy className="w-4 h-4 text-emerald-600" />
-              Best all-time
+              Best since the fresh start
             </CardTitle>
             <CardDescription>
               {best.name} — {usd(bestAllStats.staked)} bet → {usd(bestAllStats.pnl)} profit (
@@ -1118,14 +1122,13 @@ export default function Strategies() {
               <div className="divide-y max-h-[640px] overflow-y-auto">
                 {sortedStrategies.map((s, i) => {
                   const isSelected = selectedId === s.strategy_id;
-                  const hasTrades = (s.total_trades || 0) > 0;
                   const params = parseParams(s);
                   const gradeLabel = strategyGradeLabel(params);
                   const liveSidebar = liveStatsByStrategy.get(s.strategy_id);
-                  const pastStats = statsFromStrategyEntity(s);
-                  const allForStrategy = combineStats(pastStats, liveSidebar || statsFromTrades([]));
+                  const allForStrategy = liveSidebar || statsFromTrades([]);
+                  const hasTrades = (allForStrategy.total || 0) > 0;
                   const trust = trustLabel(allForStrategy.resolved || 0);
-                  const openTotal = (pastStats.open || 0) + (liveSidebar?.open || 0);
+                  const openTotal = allForStrategy.open || 0;
                   return (
                     <button
                       key={s.id}
@@ -1187,15 +1190,10 @@ export default function Strategies() {
                                 "text-sm font-semibold",
                                 (allForStrategy.roi || 0) >= 0 ? "text-emerald-600" : "text-red-600"
                               )}
-                              title="All-time return (past + live) — use this to compare"
+                              title="Return since the fresh start"
                             >
                               {pct(allForStrategy.roi)}
                             </p>
-                            {pastStats.resolved > 0 && (
-                              <p className="text-[10px] text-muted-foreground" title="Past test only">
-                                past {pct(pastStats.roi)}
-                              </p>
-                            )}
                             {liveSidebar?.resolved > 0 && (
                               <p className="text-[10px] text-muted-foreground" title="Live paper only">
                                 fwd {pct(liveSidebar.roi)}

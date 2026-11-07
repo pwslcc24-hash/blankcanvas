@@ -92,7 +92,7 @@
     },
     "skill_grade": {
       "type": "string",
-      "description": "Letter grade (A-F) derived from the latest skill score"
+      "description": "Letter grade (A-F) from bets watched since tracking started and officially settled. Blank until 30 of those bets exist."
     },
     "score_confidence": {
       "type": "string",

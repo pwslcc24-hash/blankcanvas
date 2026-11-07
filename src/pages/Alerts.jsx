@@ -172,8 +172,8 @@ export default function Alerts() {
             Consensus alerts
           </h1>
           <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-            Fires when 3+ A/B wallets (medium+ confidence) buy the same outcome within 6 hours.
-            Strong signals pass slow-market and price-drift filters — still paper-trade before real money.
+            Fires when 3 or more wallets with a new A or B buy the same side within 6 hours.
+            The price has to have barely moved. Old grades do not count. This is still practice money.
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -240,12 +240,14 @@ export default function Discover() {
                         <div className="text-xs text-muted-foreground font-mono">{shortAddress(address)}</div>
                       </TableCell>
                       <TableCell>
-                        {tracked?.skill_grade ? (
+                        {tracked?.skill_grade &&
+                        tracked.last_scored_at &&
+                        new Date(tracked.last_scored_at).getTime() >= new Date("2026-11-07T05:00:00.000Z").getTime() ? (
                           <Badge variant="outline" className={GRADE_STYLES[tracked.skill_grade] || ""}>
                             {tracked.skill_grade} · {Number(tracked.skill_score || 0).toFixed(0)}
                           </Badge>
                         ) : isTracked ? (
-                          <span className="text-xs text-muted-foreground">Not scored</span>
+                          <span className="text-xs text-muted-foreground">Waiting on watched bets</span>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}

@@ -178,12 +178,16 @@ export default function WalletDetail() {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
                 <CardTitle className="text-base">
-                  Skill score: {score.grade} ({Number(score.score).toFixed(0)}/100)
+                  Skill score:{" "}
+                  {score.grade &&
+                  score.computed_at &&
+                  new Date(score.computed_at).getTime() >= new Date("2026-11-07T05:00:00.000Z").getTime()
+                    ? `${score.grade} (${Number(score.score).toFixed(0)}/100)`
+                    : "no grade yet"}
                 </CardTitle>
                 <CardDescription>
-                  Confidence: {score.confidence} · based on {score.closed_market_count} closed market
-                  {score.closed_market_count === 1 ? "" : "s"} in synced history · computed{" "}
-                  {formatDate(score.computed_at)}
+                  Needs 30 finished bets you watched. So far: {score.closed_market_count}. A grade counts
+                  only when they beat the price they paid. Computed {formatDate(score.computed_at)}
                 </CardDescription>
               </div>
             </div>
@@ -250,10 +254,9 @@ export default function WalletDetail() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground mt-4">
-              Calibration edge compares actual wins against the price the wallet paid — buying favorites at a high
-              price and winning often scores near zero here, since that's the market being right, not skill.
-              Out-of-sample metrics only count markets first traded after you started tracking this wallet — the
-              honest forward-test signal. Scores from fewer than ~30 closed markets should be treated as provisional.
+              The numbers above are only bets placed after you started watching this wallet, and only after
+              Polymarket officially settled them. Selling early does not count. Beating the price means they won
+              more often than the price they paid. Under 30 of those bets, there is no letter grade.
             </p>
           </CardContent>
         </Card>

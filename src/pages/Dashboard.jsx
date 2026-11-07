@@ -370,7 +370,9 @@ export default function Dashboard() {
                         <div className="text-xs text-muted-foreground">{shortAddress(wallet.address)}</div>
                       </TableCell>
                       <TableCell>
-                        {wallet.skill_grade ? (
+                        {wallet.skill_grade &&
+                        wallet.last_scored_at &&
+                        new Date(wallet.last_scored_at).getTime() >= new Date("2026-11-07T05:00:00.000Z").getTime() ? (
                           <div>
                             <Badge variant="outline" className={GRADE_STYLES[wallet.skill_grade] || ""}>
                               {wallet.skill_grade} · {Number(wallet.skill_score || 0).toFixed(0)}
@@ -382,7 +384,7 @@ export default function Dashboard() {
                             )}
                           </div>
                         ) : (
-                          <span className="text-xs text-muted-foreground">Not scored</span>
+                          <span className="text-xs text-muted-foreground">Waiting on watched bets</span>
                         )}
                       </TableCell>
                       <TableCell>

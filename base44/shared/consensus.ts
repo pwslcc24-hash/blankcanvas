@@ -43,8 +43,13 @@ const DEFAULT_OPTS: Required<Omit<ConsensusDetectOptions, "now">> = {
   maxPriceDriftCaution: 0.05,
 };
 
-/** Grade A/B with medium+ confidence — the pool we treat as "skilled" for consensus. */
+/** Grades scored before this used old luck, not bets we watched. */
+export const GRADE_RESET_AT = "2026-11-07T05:00:00.000Z";
+
+/** A/B from the new watched-bet grade only. Older letters cannot trigger a play. */
 export function isSkilledForConsensus(wallet: any): boolean {
+  const scoredAt = wallet?.last_scored_at ? new Date(wallet.last_scored_at).getTime() : 0;
+  if (!Number.isFinite(scoredAt) || scoredAt < new Date(GRADE_RESET_AT).getTime()) return false;
   const grade = wallet?.skill_grade;
   const conf = wallet?.score_confidence;
   if (!grade || !conf) return false;

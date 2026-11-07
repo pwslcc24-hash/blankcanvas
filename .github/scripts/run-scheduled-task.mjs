@@ -126,7 +126,7 @@ for (const name of functionNames) {
       if (name === "sync-batch" || name === "score-batch") {
         payload = { runStartedAt };
       } else if (name === "detect-consensus") {
-        payload = { minWallets: 2 };
+        payload = { minWallets: 3 };
       } else if (name === "backtest-strategies") {
         payload = { force: true };
       } else if (name === "fact-check-paper-trades") {

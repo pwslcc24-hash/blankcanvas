@@ -90,7 +90,10 @@ export default async function (req: Request): Promise<Response> {
     let corrected = 0;
     let skippedRateLimit = false;
 
-    for (const preset of STRATEGY_PRESETS) {
+    // One live play: 3 watched A/B wallets, 6 hours, price barely moved.
+    const livePresets = STRATEGY_PRESETS.filter((preset) => preset.strategy_id === "baseline-3ab-6h");
+
+    for (const preset of livePresets) {
       if (inactive.has(preset.strategy_id)) continue;
 
       for (const alert of recentAlerts) {
